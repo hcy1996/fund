@@ -1,0 +1,109 @@
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  deviceId     String?   @unique
+  createdAt    DateTime  @default(now())
+
+  holdings     Holding[]
+  accounts     Account[]
+  watchlistGroups WatchlistGroup[]
+  watchlistItems  WatchlistItem[]
+}
+
+model Fund {
+  id        String    @id @default(cuid())
+  code      String    @unique
+  name      String
+  createdAt DateTime  @default(now())
+
+  holdings  Holding[]
+}
+
+model Holding {
+  id         String    @id @default(cuid())
+  userId     String
+  accountId  String?
+  fundId     String
+  shares     Decimal   @db.Decimal(20, 4)
+  costPrice  Decimal   @db.Decimal(20, 4)
+  sortOrder  Int?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  user       User      @relation(fields: [userId], references: [id])
+  account    Account?  @relation(fields: [accountId], references: [id])
+  fund       Fund      @relation(fields: [fundId], references: [id])
+}
+
+model Account {
+  id        String    @id @default(cuid())
+  userId    String
+  name      String
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id])
+  holdings Holding[]
+
+  @@unique([userId, name])
+}
+
+model FundSnapshot {
+  id           String   @id @default(cuid())
+  fundCode     String
+  nav          Decimal? @db.Decimal(20, 4)
+  estimateNav  Decimal? @db.Decimal(20, 4)
+  estimateRate Decimal? @db.Decimal(10, 4)
+  timestamp    DateTime @default(now())
+}
+
+model WatchlistGroup {
+  id        String   @id @default(cuid())
+  userId    String
+  name      String
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user        User                   @relation(fields: [userId], references: [id])
+  memberships WatchlistItemGroup[]
+
+  @@unique([userId, name])
+}
+
+model WatchlistItem {
+  id        String   @id @default(cuid())
+  userId    String
+  fundCode  String
+  fundName  String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user        User               @relation(fields: [userId], references: [id])
+  memberships WatchlistItemGroup[]
+
+  @@unique([userId, fundCode])
+}
+
+model WatchlistItemGroup {
+  id        String   @id @default(cuid())
+  groupId   String
+  itemId    String
+  createdAt DateTime @default(now())
+
+  group WatchlistGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  item  WatchlistItem  @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, itemId])
+}
+
