@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { deleteAccountForUser } from "@/services/accountService";
+import { deleteAccountForUser, updateAccountForUser } from "@/services/accountService";
 
 type RouteCtx = { params: Promise<{ id: string }> };
 
@@ -22,5 +22,41 @@ export async function DELETE(_req: Request, ctx: RouteCtx) {
       { status: 400 },
     );
   }
+}
+
+export async function PUT(req: Request, ctx: RouteCtx) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    return NextResponse.json({ error: "未登录" }, { status: 401 });
+  }
+
+  const { id } = await ctx.params;
+
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return NextResponse.json({ error: "请求体无效" }, { status: 400 });
+  }
+
+  const inputObj =
+    typeof body === "object" && body ? (body as Record<string, unknown>) : {};
+
+  const nextName = typeof inputObj.name === "string" ? inputObj.name : undefined;
+  const nextOwner = typeof inputObj.owner === "string" ? inputObj.owner : undefined;
+
+  if (nextName === undefined && nextOwner === undefined) {
+    return NextResponse.json({ error: "无更新字段" }, { status: 400 });
+  }
+
+  const row = await updateAccountForUser(session.user.id, id, {
+    name: nextName as string | undefined,
+    owner: nextOwner as string | undefined,
+  });
+  if (!row) {
+    return NextResponse.json({ error: "未找到账户" }, { status: 404 });
+  }
+
+  return NextResponse.json(row);
 }
 

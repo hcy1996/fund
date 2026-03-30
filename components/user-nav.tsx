@@ -55,6 +55,14 @@ export function UserNav() {
             role="menu"
             className="absolute right-0 z-50 mt-1 min-w-[10rem] rounded-xl border border-[#e2ebff] bg-white py-1 shadow-lg shadow-[#1f2a44]/10"
           >
+            <Link
+              href="/admin"
+              role="menuitem"
+              className="flex w-full px-3 py-2 text-left text-sm text-[#4d5f87] transition hover:bg-[#f5f8ff] hover:text-[#1677ff]"
+              onClick={() => setOpen(false)}
+            >
+              设置
+            </Link>
             <button
               type="button"
               role="menuitem"

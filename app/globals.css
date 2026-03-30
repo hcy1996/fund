@@ -39,3 +39,30 @@ button:disabled,
 input:disabled {
   cursor: not-allowed;
 }
+
+/* 隐藏竖向滚动条（保留可滚动能力） */
+html {
+  scrollbar-width: none; /* Firefox */
+}
+
+body {
+  scrollbar-width: none; /* Firefox */
+  -ms-overflow-style: none; /* IE/Edge Legacy */
+}
+
+body::-webkit-scrollbar {
+  width: 0;
+}
+
+/* 对所有可能滚动的容器生效，避免局部容器仍占用滚动条宽度 */
+* {
+  scrollbar-width: none; /* Firefox */
+}
+
+*::-webkit-scrollbar:vertical {
+  width: 0;
+}
+
+*::-webkit-scrollbar:horizontal {
+  height: 0;
+}

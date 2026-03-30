@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useSession } from "next-auth/react";
 import { ScreenshotImportModal } from "@/components/home/screenshot-import-modal";
+import { HomeStatsTab } from "@/components/home/home-stats-tab";
+import { useMessage } from "@/components/common/message-provider";
 import { activeAccountStorageKey } from "@/lib/fundHomeStorage";
 import { DEFAULT_WATCHLIST_GROUP_NAME } from "@/lib/watchlistConstants";
 import type { HoldingWithProfit } from "@/types/holding";
@@ -12,6 +14,7 @@ import type { WatchlistGroupedDto, WatchlistGroupDto } from "@/types/watchlist";
 type AccountItem = {
   id: string;
   name: string;
+  owner: string;
 };
 
 const FUND_HOME_TAB_STORAGE_KEY = "fund-home:activeTab";
@@ -55,6 +58,56 @@ function HoldingBulkIcon({ className }: { className?: string }) {
   );
 }
 
+function Sparkline({
+  points,
+  stroke,
+  baseline,
+}: {
+  points: Array<{ t: string; price: number }>;
+  stroke: string;
+  baseline?: number;
+}) {
+  const W = 120;
+  const H = 36;
+  if (points.length < 2) {
+    return <div className="h-9 w-[120px] rounded-md bg-[#f5f8ff]" aria-hidden />;
+  }
+  const ys = points.map((p) => p.price);
+  const min = Math.min(...ys);
+  const max = Math.max(...ys);
+  const span = Math.max(1e-9, max - min);
+  const step = W / (points.length - 1);
+  const d = points
+    .map((p, i) => {
+      const x = i * step;
+      const y = H - ((p.price - min) / span) * H;
+      return `${i === 0 ? "M" : "L"}${x.toFixed(2)} ${y.toFixed(2)}`;
+    })
+    .join(" ");
+
+  const baselineY =
+    baseline === undefined || baseline === null
+      ? null
+      : H - ((baseline - min) / span) * H;
+
+  return (
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="h-9 w-[120px]" aria-hidden>
+      {baselineY !== null && baselineY >= 0 && baselineY <= H && (
+        <line
+          x1={0}
+          y1={baselineY}
+          x2={W}
+          y2={baselineY}
+          stroke="#8ea1c8"
+          strokeWidth="1.5"
+          strokeDasharray="4 2"
+        />
+      )}
+      <path d={d} fill="none" stroke={stroke} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  );
+}
+
 function GroupDeleteIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -74,10 +127,13 @@ function GroupDeleteIcon({ className }: { className?: string }) {
 
 export function FundHome() {
   const { data: session } = useSession();
-  const [activeTab, setActiveTab] = useState<"home" | "watchlist">("home");
+  const message = useMessage();
+  const [activeTab, setActiveTab] = useState<"home" | "watchlist" | "market" | "stats">("home");
   const [accounts, setAccounts] = useState<AccountItem[]>([]);
   const [activeAccountId, setActiveAccountId] = useState<string | null>(null);
   const [holdings, setHoldings] = useState<HoldingWithProfit[]>([]);
+  const [ownerHoldings, setOwnerHoldings] = useState<HoldingWithProfit[]>([]);
+  const [ownerHoldingsLoading, setOwnerHoldingsLoading] = useState(false);
   const [holdingsLoading, setHoldingsLoading] = useState(true);
   const [draggingHoldingId, setDraggingHoldingId] = useState<string | null>(null);
   const [holdingActionLoading, setHoldingActionLoading] = useState(false);
@@ -99,6 +155,26 @@ export function FundHome() {
   const [renamingGroupId, setRenamingGroupId] = useState<string | null>(null);
   const [renameGroupDraft, setRenameGroupDraft] = useState("");
   const [screenshotImportOpen, setScreenshotImportOpen] = useState(false);
+  const [exportingConfig, setExportingConfig] = useState(false);
+  const [marketLoading, setMarketLoading] = useState(false);
+  const [marketError, setMarketError] = useState<string | null>(null);
+  const [marketIndices, setMarketIndices] = useState<
+    Array<{
+      code: string;
+      name: string;
+      price: number;
+      prevClose: number;
+      change: number;
+      changePct: number;
+      points: Array<{ t: string; price: number }>;
+    }>
+  >([]);
+
+  const focusIndex = useMemo(() => marketIndices.find((it) => it.code === "H30269"), [marketIndices]);
+  const otherIndices = useMemo(
+    () => marketIndices.filter((it) => it.code !== "H30269"),
+    [marketIndices],
+  );
 
   /** 供 loadAccounts 在异步流程中读取“上一选中账户”（避免仅用闭包 prev 不一致） */
   const activeAccountIdRef = useRef<string | null>(null);
@@ -126,7 +202,48 @@ export function FundHome() {
     return { totalDailyProfit: totalDaily, todayReturnRate };
   }, [holdings]);
 
-  const showEstimateSummaryBadge = useMemo(() => holdings.some((h) => h.navTag === "estimate"), [holdings]);
+  const activeOwnerName = useMemo(() => {
+    if (!activeAccountId) return null;
+    return accounts.find((a) => a.id === activeAccountId)?.owner ?? null;
+  }, [accounts, activeAccountId]);
+
+  const activeOwnerAccountCount = useMemo(() => {
+    if (!activeOwnerName) return 0;
+    return accounts.filter((a) => a.owner === activeOwnerName).length;
+  }, [accounts, activeOwnerName]);
+
+  const ownerHoldingsTodaySummary = useMemo(() => {
+    if (ownerHoldings.length === 0) {
+      return { totalDailyProfit: 0, todayReturnRate: 0 };
+    }
+    let totalDaily = 0;
+    let prevDayTotal = 0;
+    for (const h of ownerHoldings) {
+      totalDaily += h.profit.dailyProfit;
+      const r = h.dailyChangeRate ?? h.profit.dailyProfitRate ?? 0;
+      const v = h.profit.estimateValue;
+      if (Number.isFinite(v) && Number.isFinite(r) && r > -1) {
+        prevDayTotal += v / (1 + r);
+      } else if (Number.isFinite(v)) {
+        prevDayTotal += v;
+      }
+    }
+    const todayReturnRate = prevDayTotal > 0 ? totalDaily / prevDayTotal : 0;
+    return { totalDailyProfit: totalDaily, todayReturnRate };
+  }, [ownerHoldings]);
+
+  const showEstimateSummaryBadge = useMemo(
+    () => holdings.some((h) => h.navTag === "estimate" || h.navTag === "stale"),
+    [holdings],
+  );
+
+  const showOfficialUpdatedBadge = useMemo(() => {
+    if (holdings.length === 0) return false;
+    const now = new Date();
+    const afterClose = now.getHours() > 15 || (now.getHours() === 15 && now.getMinutes() >= 0);
+    if (!afterClose) return false;
+    return holdings.every((h) => h.navTag === "official");
+  }, [holdings]);
 
   const holdingCtxTargetRow = useMemo(() => {
     if (!holdingCtxMenu) return null;
@@ -140,7 +257,7 @@ export function FundHome() {
   useEffect(() => {
     try {
       const v = localStorage.getItem(FUND_HOME_TAB_STORAGE_KEY);
-      if (v === "home" || v === "watchlist") {
+      if (v === "home" || v === "watchlist" || v === "market" || v === "stats") {
         setActiveTab(v);
       }
     } catch {
@@ -148,12 +265,42 @@ export function FundHome() {
     }
   }, []);
 
-  const setFundHomeTab = useCallback((tab: "home" | "watchlist") => {
+  const setFundHomeTab = useCallback((tab: "home" | "watchlist" | "market" | "stats") => {
     setActiveTab(tab);
     try {
       localStorage.setItem(FUND_HOME_TAB_STORAGE_KEY, tab);
     } catch {
       /* ignore */
+    }
+  }, []);
+
+  const loadMarket = useCallback(async () => {
+    setMarketLoading(true);
+    setMarketError(null);
+    try {
+      const res = await fetch("/api/markets/indices");
+      if (!res.ok) {
+        setMarketIndices([]);
+        setMarketError("加载行情失败");
+        return;
+      }
+      const j = (await res.json()) as {
+        indices: Array<{
+          code: string;
+          name: string;
+          price: number;
+          prevClose: number;
+          change: number;
+          changePct: number;
+          points: Array<{ t: string; price: number }>;
+        }>;
+      };
+      setMarketIndices(j.indices ?? []);
+    } catch {
+      setMarketIndices([]);
+      setMarketError("网络错误");
+    } finally {
+      setMarketLoading(false);
     }
   }, []);
 
@@ -177,6 +324,26 @@ export function FundHome() {
       }
     }
   }, [activeAccountId]);
+
+  const loadOwnerHoldings = useCallback(async (ownerNameRaw?: string | null) => {
+    const ownerName = ownerNameRaw?.trim();
+    if (!ownerName) {
+      setOwnerHoldings([]);
+      return;
+    }
+    setOwnerHoldingsLoading(true);
+    try {
+      const res = await fetch(`/api/holdings?ownerName=${encodeURIComponent(ownerName)}`);
+      if (res.ok) {
+        const data = (await res.json()) as HoldingWithProfit[];
+        setOwnerHoldings(data);
+      } else {
+        setOwnerHoldings([]);
+      }
+    } finally {
+      setOwnerHoldingsLoading(false);
+    }
+  }, []);
 
   const loadAccounts = useCallback(async (): Promise<string | null> => {
     if (!session?.user?.id) {
@@ -322,6 +489,15 @@ export function FundHome() {
   }, [session?.user?.id, activeAccountId, loadHoldings]);
 
   useEffect(() => {
+    if (!session?.user?.id) return;
+    if (!activeOwnerName || activeOwnerAccountCount <= 1) {
+      setOwnerHoldings([]);
+      return;
+    }
+    void loadOwnerHoldings(activeOwnerName);
+  }, [activeOwnerName, activeOwnerAccountCount, loadOwnerHoldings, session?.user?.id]);
+
+  useEffect(() => {
     setSelectedHoldingIds([]);
   }, [activeAccountId]);
 
@@ -335,6 +511,11 @@ export function FundHome() {
       window.removeEventListener("scroll", close, true);
     };
   }, [holdingCtxMenu]);
+
+  useEffect(() => {
+    if (activeTab !== "market") return;
+    void loadMarket();
+  }, [activeTab, loadMarket]);
 
   async function saveRenameGroup(groupId: string) {
     const name = renameGroupDraft.trim();
@@ -584,6 +765,59 @@ export function FundHome() {
     });
   }
 
+  const exportConfigJson = useCallback(async () => {
+    if (!session?.user) {
+      message.error("请先登录");
+      return;
+    }
+    if (accounts.length === 0) {
+      message.error("当前没有可导出的账户");
+      return;
+    }
+
+    setExportingConfig(true);
+    try {
+      const tplRes = await fetch("/api/export-config/template");
+      if (!tplRes.ok) throw new Error("读取模板失败");
+      const template = (await tplRes.json()) as Record<string, unknown>;
+
+      const fundListGroup = await Promise.all(
+        accounts.map(async (acc) => {
+          const res = await fetch(`/api/holdings?accountId=${encodeURIComponent(acc.id)}`);
+          if (!res.ok) throw new Error(`读取账户「${acc.name}」持仓失败`);
+          const rows = (await res.json()) as HoldingWithProfit[];
+          return {
+            name: acc.name,
+            funds: rows.map((h) => ({
+              code: h.fundCode,
+              cost: h.costPrice,
+              num: h.shares,
+            })),
+          };
+        }),
+      );
+
+      const out = { ...template, fundListGroup };
+      const payload = `${JSON.stringify(out, null, 2)}\n`;
+      const blob = new Blob([payload], { type: "application/json;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const now = new Date();
+      const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}-${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `export-config-${stamp}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      message.success("配置已导出");
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : "导出失败");
+    } finally {
+      setExportingConfig(false);
+    }
+  }, [accounts, message, session?.user]);
+
   return (
     <div className="space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -606,15 +840,43 @@ export function FundHome() {
           >
             自选
           </button>
-        </div>
-        {activeTab === "home" && session?.user && (
           <button
             type="button"
-            onClick={() => setScreenshotImportOpen(true)}
-            className="rounded-md border border-[#dbe5ff] bg-white px-3 py-1 text-sm font-medium text-[#5e6f95] hover:bg-[#f5f8ff]"
+            onClick={() => setFundHomeTab("market")}
+            className={`rounded-md px-2.5 py-1 text-sm font-medium ${
+              activeTab === "market" ? "bg-[#1677ff] text-white" : "text-[#4d5f87]"
+            }`}
           >
-            截图导入
+            行情
           </button>
+          <button
+            type="button"
+            onClick={() => setFundHomeTab("stats")}
+            className={`rounded-md px-2.5 py-1 text-sm font-medium ${
+              activeTab === "stats" ? "bg-[#1677ff] text-white" : "text-[#4d5f87]"
+            }`}
+          >
+            统计
+          </button>
+        </div>
+        {activeTab === "home" && session?.user && (
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setScreenshotImportOpen(true)}
+              className="rounded-md border border-[#dbe5ff] bg-white px-3 py-1 text-sm font-medium text-[#5e6f95] hover:bg-[#f5f8ff]"
+            >
+              截图导入
+            </button>
+            <button
+              type="button"
+              onClick={() => void exportConfigJson()}
+              disabled={exportingConfig}
+              className="rounded-md border border-[#dbe5ff] bg-white px-3 py-1 text-sm font-medium text-[#5e6f95] hover:bg-[#f5f8ff] disabled:opacity-50"
+            >
+              {exportingConfig ? "导出中…" : "导出配置"}
+            </button>
+          </div>
         )}
       </div>
 
@@ -623,7 +885,7 @@ export function FundHome() {
           <section className="rounded-lg border border-[#dbe5ff] bg-white p-2 shadow-sm">
             <div className="mb-1.5 flex flex-wrap items-end justify-between gap-x-3 gap-y-1">
               <div className="flex flex-wrap items-center gap-1.5">
-                <h3 className="text-sm font-semibold text-[#1f2a44]">持仓</h3>
+                <h3 className="text-base font-semibold text-[#1f2a44]">持仓</h3>
                 {session?.user && accounts.length > 0 && (
                   <div className="flex flex-wrap items-center gap-1">
                     {accounts.map((acc) => (
@@ -631,7 +893,7 @@ export function FundHome() {
                         <button
                           type="button"
                           onClick={() => selectAccount(acc.id)}
-                          className={`rounded-full border px-2.5 py-0.5 text-[11px] ${
+                          className={`rounded-full border px-4 py-2 text-sm leading-none ${
                             acc.id === activeAccountId
                               ? "border-[#1677ff] bg-[#eaf4ff] text-[#1677ff]"
                               : "border-[#dbe5ff] bg-white text-[#5e6f95]"
@@ -654,7 +916,7 @@ export function FundHome() {
                     <button
                       type="button"
                       onClick={() => void handleCreateAccount()}
-                      className="ml-0.5 rounded-full border border-dashed border-[#dbe5ff] px-1.5 py-0.5 text-[10px] text-[#1677ff] hover:border-[#1677ff]"
+                      className="ml-0.5 rounded-full border border-dashed border-[#dbe5ff] px-3 py-2 text-[13px] leading-none text-[#1677ff] hover:border-[#1677ff]"
                     >
                       +账户
                     </button>
@@ -663,14 +925,61 @@ export function FundHome() {
               </div>
               {session?.user && !holdingsLoading && holdings.length > 0 && (
                 <div className="flex shrink-0 flex-wrap items-end justify-end gap-x-4 [font-variant-numeric:tabular-nums]">
+                  {activeOwnerAccountCount > 1 && activeOwnerName && (
+                    <div className="flex items-end gap-x-4 pr-3 mr-1 border-r border-[#e8efff]">
+                      <div className="text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <p className="text-[10px] font-medium text-[#7b8fb7]">
+                            {activeOwnerName}·今日收益
+                          </p>
+                          {ownerHoldingsLoading && (
+                            <span className="text-[10px] text-[#9baccb]">…</span>
+                          )}
+                        </div>
+                        <p
+                          className={`mt-0.5 text-sm font-semibold leading-none ${
+                            ownerHoldingsTodaySummary.totalDailyProfit >= 0
+                              ? "text-[#ff5f6d]"
+                              : "text-[#00d26a]"
+                          }`}
+                        >
+                          {fmtSignedMoney(ownerHoldingsTodaySummary.totalDailyProfit)}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          <p className="text-[10px] font-medium text-[#7b8fb7]">
+                            {activeOwnerName}·今日涨跌
+                          </p>
+                          {ownerHoldingsLoading && (
+                            <span className="text-[10px] text-[#9baccb]">…</span>
+                          )}
+                        </div>
+                        <p
+                          className={`mt-0.5 text-sm font-semibold leading-none ${
+                            ownerHoldingsTodaySummary.todayReturnRate >= 0
+                              ? "text-[#ff5f6d]"
+                              : "text-[#00d26a]"
+                          }`}
+                        >
+                          {fmtSignedPct(ownerHoldingsTodaySummary.todayReturnRate)}
+                        </p>
+                      </div>
+                    </div>
+                  )}
                   <div className="text-right">
                     <div className="flex items-center justify-end gap-1">
-                      <p className="text-[10px] font-medium text-[#7b8fb7]">今日收益</p>
+                      {showOfficialUpdatedBadge && !showEstimateSummaryBadge && (
+                        <span className="inline-flex items-center justify-center rounded-full bg-[#eaf4ff] px-1.5 py-0.5 text-[10px] font-semibold text-[#1677ff]">
+                          已更新
+                        </span>
+                      )}
                       {showEstimateSummaryBadge && (
                         <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-[#fff3e0] text-[#d97706] text-[10px] font-semibold">
                           估
                         </span>
                       )}
+                      <p className="text-[10px] font-medium text-[#7b8fb7]">今日收益</p>
                     </div>
                     <p
                       className={`mt-0.5 text-sm font-semibold leading-none ${
@@ -683,11 +992,6 @@ export function FundHome() {
                   <div className="text-right">
                     <div className="flex items-center justify-end gap-1">
                       <p className="text-[10px] font-medium text-[#7b8fb7]">今日涨跌</p>
-                      {showEstimateSummaryBadge && (
-                        <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-[#fff3e0] text-[#d97706] text-[10px] font-semibold">
-                          估
-                        </span>
-                      )}
                     </div>
                     <p
                       className={`mt-0.5 text-sm font-semibold leading-none ${
@@ -801,6 +1105,15 @@ export function FundHome() {
                         <HoldingBulkIcon />
                       </button>
                     )}
+                    {session?.user && (
+                      <Link
+                        href="/pk"
+                        className="inline-flex h-5 w-5 items-center justify-center rounded border border-[#dbe5ff] bg-white text-[10px] font-medium text-[#5e6f95] hover:bg-[#f5f8ff] leading-none"
+                        title="基金对比 PK"
+                      >
+                        PK
+                      </Link>
+                    )}
                     <button
                       type="button"
                       onClick={() => setSortEditMode((v) => !v)}
@@ -817,15 +1130,21 @@ export function FundHome() {
                   </div>
                   <div className="pr-1 text-right">
                     <p className="text-[11px] font-medium text-[#5e6f95]">涨跌</p>
-                    <p className="text-[10px] text-[#9baccb]">{holdings[0]?.navDate ?? "—"}</p>
+                    <p className="text-[10px] text-[#9baccb]">
+                      {holdings[0]?.estimateTime ?? holdings[0]?.navDate ?? "—"}
+                    </p>
                   </div>
                   <div className="pr-1 text-right">
                     <p className="text-[11px] font-medium leading-tight text-[#5e6f95]">当日收益</p>
-                    <p className="text-[10px] text-[#9baccb]">{holdings[0]?.navDate ?? "—"}</p>
+                    <p className="text-[10px] text-[#9baccb]">
+                      {holdings[0]?.estimateTime ?? holdings[0]?.navDate ?? "—"}
+                    </p>
                   </div>
                   <div className="pr-1 text-right">
                     <p className="text-[11px] font-medium leading-tight text-[#5e6f95]">持有收益</p>
-                    <p className="text-[10px] text-[#9baccb]">{holdings[0]?.navDate ?? "—"}</p>
+                    <p className="text-[10px] text-[#9baccb]">
+                      {holdings[0]?.estimateTime ?? holdings[0]?.navDate ?? "—"}
+                    </p>
                   </div>
                 </div>
                 {holdings.map((h) => (
@@ -892,10 +1211,16 @@ export function FundHome() {
                           className={`rounded px-1.5 py-0.5 text-[10px] ${
                             h.navTag === "estimate"
                               ? "bg-[#fff3e0] text-[#d97706]"
-                              : "bg-[#eaf4ff] text-[#1677ff]"
+                              : h.navTag === "stale"
+                                ? "bg-[#f3f4f6] text-[#6b7280]"
+                                : "bg-[#eaf4ff] text-[#1677ff]"
                           }`}
                         >
-                          {h.navTag === "estimate" ? "估算" : "已更新"}
+                          {h.navTag === "estimate"
+                            ? "估算"
+                            : h.navTag === "stale"
+                              ? "未更新"
+                              : "已更新"}
                         </span>
                       </div>
                     </div>
@@ -1237,6 +1562,150 @@ export function FundHome() {
           )}
         </section>
       )}
+
+      {activeTab === "market" && (
+        <section className="p-0 shadow-none bg-transparent border-0">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 mb-[6px]">
+              <h3 className="text-sm font-semibold text-[#1f2a44]">行情</h3>
+              <button
+                type="button"
+                onClick={() => void loadMarket()}
+                disabled={marketLoading}
+                className="rounded-md border border-[#dbe5ff] bg-white px-2 py-0.5 text-[11px] text-[#5e6f95] hover:bg-[#f5f8ff] disabled:opacity-50"
+              >
+                {marketLoading ? "刷新中…" : "刷新"}
+              </button>
+            </div>
+            <p className="text-[10px] text-[#8ea1c8]">数据源：东方财富</p>
+          </div>
+
+          {marketError && <p className="mt-2 text-xs text-red-500">{marketError}</p>}
+          {marketLoading && marketIndices.length === 0 ? (
+            <p className="mt-2 text-xs text-[#6a7ea8]">加载中…</p>
+          ) : marketIndices.length === 0 ? (
+            <p className="mt-2 text-xs text-[#6a7ea8]">暂无数据</p>
+          ) : (
+            <div className="space-y-2">
+              <div className="rounded-lg border border-[#e8efff] bg-white px-3 py-2">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm font-semibold text-[#1f2a44]">大盘指数</p>
+                  <p className="text-[10px] text-[#8ea1c8]">
+                    {otherIndices.length} 项
+                  </p>
+                </div>
+                <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                  {otherIndices.map((it) => {
+                    const up = it.changePct >= 0;
+                    const color = up ? "#ff5f6d" : "#00b96b";
+                    const changePoints = it.points.map((p) => ({ t: p.t, price: p.price - it.prevClose }));
+                    return (
+                      <div
+                        key={it.code}
+                        className="rounded-lg border border-[#e8efff] bg-white px-3 py-2"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="min-w-0 truncate text-xs font-semibold text-[#1f2a44]">
+                                {it.name}
+                              </p>
+                              <p className="shrink-0 text-[10px] text-[#8ea1c8] tabular-nums">{it.code}</p>
+                            </div>
+                            <p
+                              className="mt-0.5 text-xl font-bold tabular-nums"
+                              style={{ color }}
+                            >
+                              {it.price.toFixed(2)}
+                            </p>
+                            <p
+                              className="mt-0.5 text-xs tabular-nums"
+                              style={{ color }}
+                            >
+                              {it.change >= 0 ? "+" : ""}
+                              {it.change.toFixed(2)}{" "}
+                              <span className="ml-1">
+                                {it.changePct >= 0 ? "+" : ""}
+                                {it.changePct.toFixed(2)}%
+                              </span>
+                            </p>
+                          </div>
+                          <div className="shrink-0">
+                            <Sparkline points={changePoints} stroke={color} baseline={0} />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {focusIndex && (
+                <div className="rounded-lg border border-[#e8efff] bg-[#f9fbff] px-3 py-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-[#1f2a44]">关注指数</p>
+                    <p className="text-[10px] text-[#8ea1c8]">{focusIndex.name}</p>
+                  </div>
+                  <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                    {(() => {
+                      const up = focusIndex.changePct >= 0;
+                      const color = up ? "#ff5f6d" : "#00b96b";
+                      return (
+                        <div
+                          key={focusIndex.code}
+                          className="rounded-lg border border-[#e8efff] bg-white px-3 py-2"
+                        >
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="min-w-0 truncate text-xs font-semibold text-[#1f2a44]">
+                                  {focusIndex.name}
+                                </p>
+                                <p className="shrink-0 text-[10px] text-[#8ea1c8] tabular-nums">
+                                  {focusIndex.code}
+                                </p>
+                              </div>
+                              <p
+                                className="mt-0.5 text-xl font-bold tabular-nums"
+                                style={{ color }}
+                              >
+                                {focusIndex.price.toFixed(2)}
+                              </p>
+                              <p
+                                className="mt-0.5 text-xs tabular-nums"
+                                style={{ color }}
+                              >
+                                {focusIndex.change >= 0 ? "+" : ""}
+                                {focusIndex.change.toFixed(2)}{" "}
+                                <span className="ml-1">
+                                  {focusIndex.changePct >= 0 ? "+" : ""}
+                                  {focusIndex.changePct.toFixed(2)}%
+                                </span>
+                              </p>
+                            </div>
+                            <div className="shrink-0">
+                            <Sparkline
+                              points={focusIndex.points.map((p) => ({
+                                t: p.t,
+                                price: p.price - focusIndex.prevClose,
+                              }))}
+                              stroke={color}
+                              baseline={0}
+                            />
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </section>
+      )}
+
+      {activeTab === "stats" && <HomeStatsTab />}
 
       <ScreenshotImportModal
         open={screenshotImportOpen}

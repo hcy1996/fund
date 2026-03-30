@@ -16,14 +16,21 @@ model User {
 
   holdings     Holding[]
   accounts     Account[]
+  accountOwners AccountOwner[]
   watchlistGroups WatchlistGroup[]
   watchlistItems  WatchlistItem[]
+
+  fundSearchHots FundSearchHot[]
+  statsSnapshots StatsSnapshot[]
 }
 
 model Fund {
   id        String    @id @default(cuid())
   code      String    @unique
   name      String
+  /** 关联分类（可选：大类或小类 id；建议填小类 id） */
+  categoryId String?
+  category    FundCategory? @relation(fields: [categoryId], references: [id])
   createdAt DateTime  @default(now())
 
   holdings  Holding[]
@@ -49,6 +56,10 @@ model Account {
   id        String    @id @default(cuid())
   userId    String
   name      String
+  /** 是否为“我的账户”（用于统计口径筛选） */
+  isMine    Boolean   @default(true)
+  /** 归属人/统计口径。为空时会用 isMine 反推（true->我，false->姐姐） */
+  owner     String?
   createdAt DateTime  @default(now())
   updatedAt DateTime  @updatedAt
 
@@ -65,6 +76,34 @@ model FundSnapshot {
   estimateNav  Decimal? @db.Decimal(20, 4)
   estimateRate Decimal? @db.Decimal(10, 4)
   timestamp    DateTime @default(now())
+}
+
+model FundSearchHot {
+  id             String   @id @default(cuid())
+  userId         String
+  fundCode       String
+  count          Int      @default(0)
+  lastSearchedAt DateTime @default(now())
+  createdAt      DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, fundCode])
+  @@index([userId, count])
+}
+
+model AccountOwner {
+  id String @id @default(cuid())
+  userId String
+  name String
+  sortOrder Int @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([userId, name])
+  @@index([userId, sortOrder])
 }
 
 model WatchlistGroup {
@@ -105,5 +144,41 @@ model WatchlistItemGroup {
   item  WatchlistItem  @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
   @@unique([groupId, itemId])
+}
+
+model FundCategory {
+  id String @id @default(cuid())
+
+  /** 展示名：大类 / 小类都用该字段 */
+  name String
+  /** 排序：越小越靠前 */
+  sortOrder Int @default(0)
+
+  /** null 表示大类；非 null 表示小类 */
+  parentId String?
+
+  parent FundCategory? @relation("FundCategoryTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children FundCategory[] @relation("FundCategoryTree")
+  funds Fund[] @relation
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([parentId, name])
+  @@index([parentId, sortOrder])
+}
+
+model StatsSnapshot {
+  id         String   @id @default(cuid())
+  userId     String
+  ownerName  String
+  snapshotAt DateTime @default(now())
+  totalValue Decimal  @db.Decimal(20, 2)
+  png        Bytes
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, ownerName, snapshotAt])
 }
 

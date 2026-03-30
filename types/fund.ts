@@ -8,8 +8,8 @@ export type FundQuote = {
   officialChangeRate?: number;
   nav?: number;
   navDate?: string;
-  /** 当前用于展示净值的来源：estimate=估算净值, official=正式净值 */
-  navSource?: "estimate" | "official";
+  /** 当前用于展示净值的来源：estimate=估算净值, official=正式净值, stale=正式净值未追上应更新日期 */
+  navSource?: "estimate" | "official" | "stale";
   /** 当前展示净值对应的当日涨跌幅 */
   dailyChangeRate?: number;
   estimateNav?: number;

@@ -46,7 +46,7 @@ export async function listHoldingsForUser(
     // 持有金额/持有收益（总收益）：盘中若使用估算净值，只用于当日变化；
     // 总额应使用“最后正式净值（dwjz/lsjz）”，避免与支付宝持仓页口径偏离。
     const totalNav =
-      quote.navSource === "estimate" && quote.officialNav !== undefined
+      quote.navSource !== "official" && quote.officialNav !== undefined
         ? new Decimal(quote.officialNav)
         : dailyNav;
     const totalValue = shares.mul(totalNav);
@@ -72,6 +72,7 @@ export async function listHoldingsForUser(
       sortOrder: h.sortOrder,
       navTag: quote.navSource,
       navDate: quote.officialNavDate ?? quote.navDate,
+      estimateTime: quote.estimateTime,
       nav: quote.nav,
       dailyChangeRate: dailyRate,
       profit,
@@ -82,6 +83,77 @@ export async function listHoldingsForUser(
     return out.sort((a, b) => (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER));
   }
   // 默认按“持有金额(净)”排序，避免盘中估算导致排序与展示不一致
+  return out.sort((a, b) => b.profit.navValue - a.profit.navValue);
+}
+
+export async function listHoldingsForUserByAccountIds(
+  userId: string,
+  accountIds: string[],
+): Promise<HoldingWithProfit[]> {
+  const ids = accountIds.filter(Boolean);
+  if (ids.length === 0) return [];
+
+  const rows = await prisma.holding.findMany({
+    where: { userId, accountId: { in: ids } },
+    include: { fund: true },
+  });
+  if (rows.length === 0) return [];
+
+  const quotes = await Promise.all(rows.map((h) => getFundQuote(h.fund.code)));
+  const out: HoldingWithProfit[] = [];
+  for (let i = 0; i < rows.length; i++) {
+    const h = rows[i]!;
+    const quote = quotes[i]!;
+    const shares = new Decimal(h.shares.toString());
+    const costPrice = new Decimal(h.costPrice.toString());
+    const dailyNav = new Decimal(quote.nav ?? quote.estimateNav ?? quote.officialNav ?? 0);
+    const dailyValue = shares.mul(dailyNav);
+    const costTotal = shares.mul(costPrice);
+
+    const dailyRate = quote.dailyChangeRate ?? quote.estimateChangeRate ?? quote.officialChangeRate ?? 0;
+    let dailyProfit = new Decimal(0);
+    if (dailyNav.gt(0) && dailyRate > -1) {
+      const prevNav = dailyNav.div(new Decimal(1).plus(dailyRate));
+      dailyProfit = shares.mul(dailyNav.minus(prevNav));
+    }
+
+    const totalNav =
+      quote.navSource !== "official" && quote.officialNav !== undefined
+        ? new Decimal(quote.officialNav)
+        : dailyNav;
+    const totalValue = shares.mul(totalNav);
+
+    const totalProfit = totalValue.minus(costTotal);
+    const totalProfitRate = costTotal.gt(0) ? totalProfit.div(costTotal) : new Decimal(0);
+
+    const profit = {
+      estimateValue: dailyValue.toNumber(),
+      navValue: totalValue.toNumber(),
+      dailyProfit: dailyProfit.toNumber(),
+      dailyProfitRate: dailyRate,
+      totalProfit: totalProfit.toNumber(),
+      totalProfitRate: totalProfitRate.toNumber(),
+    };
+    out.push({
+      id: h.id,
+      fundCode: h.fund.code,
+      fundName: quote.fundName || h.fund.name,
+      shares: h.shares.toString(),
+      costPrice: h.costPrice.toString(),
+      sortOrder: h.sortOrder,
+      navTag: quote.navSource,
+      navDate: quote.officialNavDate ?? quote.navDate,
+      estimateTime: quote.estimateTime,
+      nav: quote.nav,
+      dailyChangeRate: dailyRate,
+      profit,
+    });
+  }
+
+  const hasManualOrder = out.some((x) => x.sortOrder !== null && x.sortOrder !== undefined);
+  if (hasManualOrder) {
+    return out.sort((a, b) => (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER));
+  }
   return out.sort((a, b) => b.profit.navValue - a.profit.navValue);
 }
 
@@ -110,6 +182,29 @@ export async function findHoldingByFundCodeForUser(
   return {
     id: row.id,
     accountId: row.accountId ?? fallbackAccountId,
+    shares: row.shares.toString(),
+    costPrice: row.costPrice.toString(),
+  };
+}
+
+/** 按基金代码 + 指定账户 查找用户持仓（用于详情页分别编辑同基金的不同账户持仓） */
+export async function findHoldingByFundCodeForUserAndAccount(
+  userId: string,
+  fundCode: string,
+  accountId?: string | null,
+): Promise<HoldingLookupRow | null> {
+  const code = fundCode.trim();
+  const acc = accountId?.trim();
+  if (!code || !acc) return null;
+  const row = await prisma.holding.findFirst({
+    where: { userId, accountId: acc, fund: { code } },
+    orderBy: { updatedAt: "desc" },
+    select: { id: true, accountId: true, shares: true, costPrice: true },
+  });
+  if (!row) return null;
+  return {
+    id: row.id,
+    accountId: row.accountId ?? acc,
     shares: row.shares.toString(),
     costPrice: row.costPrice.toString(),
   };
@@ -146,6 +241,16 @@ export async function importHoldingsBatch(
   for (const item of items) {
     const code = item.fundCode.trim();
     try {
+      // 截图导入也必须先为基金配置“小类”
+      const fundCategory = await prisma.fund.findUnique({
+        where: { code },
+        select: { categoryId: true, category: { select: { parentId: true } } },
+      });
+      const isSmallCategory = !!fundCategory?.categoryId && fundCategory?.category?.parentId !== null;
+      if (!isSmallCategory) {
+        throw new Error("加入持仓失败：请先为基金设置“小类”（大类不能直接使用）。");
+      }
+
       const existing =
         activeAccountId &&
         (await prisma.holding.findFirst({
@@ -199,6 +304,17 @@ export async function createHolding(
     update: { name },
     create: { code, name },
   });
+
+  // 加入持仓前：基金必须先设置为“小类”（parentId != null）
+  const fundCategory = await prisma.fund.findUnique({
+    where: { id: fund.id },
+    select: { categoryId: true, category: { select: { parentId: true } } },
+  });
+
+  const isSmallCategory = !!fundCategory?.categoryId && fundCategory?.category?.parentId !== null;
+  if (!isSmallCategory) {
+    throw new Error("加入持仓失败：请先为基金设置“小类”（大类不能直接使用）。");
+  }
 
   const activeAccountId = await resolveAccountIdForUser(userId, input.accountId);
 

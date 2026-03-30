@@ -17,12 +17,12 @@ const RANGE_TABS: { value: FundNavHistoryRange; label: string }[] = [
 type Props = { fundCode: string };
 
 const W = 640;
-const H = 232;
+const H = 184;
 /** 纵轴「+XX.XX%」预留宽度 */
 const PAD_L = 54;
 const PAD_R = 12;
-const PAD_T = 12;
-const PAD_B = 40;
+const PAD_T = 10;
+const PAD_B = 32;
 
 function pickXTickIndices(len: number, maxTicks: number): number[] {
   if (len <= 1) return [0];
@@ -338,7 +338,7 @@ export function FundNavChart({ fundCode }: Props) {
   const hoverRow = hoverIdx != null ? paths.coords[hoverIdx] : null;
 
   return (
-    <section className="rounded-lg border border-[#dbe5ff] bg-white p-3 shadow-sm">
+    <section className="rounded-lg border border-[#dbe5ff] bg-white p-2.5 shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-1.5">
         <h2 className="text-sm font-semibold text-[#1f2a44]">历史净值走势</h2>
         <p className="max-w-[min(24rem,100%)] text-[10px] leading-snug text-[#8ea1c8]">
@@ -348,7 +348,7 @@ export function FundNavChart({ fundCode }: Props) {
             : ""}
         </p>
       </div>
-      <div className="mt-2 flex flex-wrap gap-1">
+      <div className="mt-1.5 flex flex-wrap gap-1">
         {RANGE_TABS.map((t) => (
           <button
             key={t.value}
@@ -364,13 +364,13 @@ export function FundNavChart({ fundCode }: Props) {
           </button>
         ))}
       </div>
-      {loading && <p className="mt-2 text-xs text-[#6a7ea8]">加载中…</p>}
-      {error && <p className="mt-2 text-xs text-red-500">{error}</p>}
+      {loading && <p className="mt-1.5 text-xs text-[#6a7ea8]">加载中…</p>}
+      {error && <p className="mt-1.5 text-xs text-red-500">{error}</p>}
       {!loading && !error && (data?.points.length ?? 0) < 2 && (
-        <p className="mt-2 text-xs text-[#6a7ea8]">该区间净值数据不足，无法绘制曲线。</p>
+        <p className="mt-1.5 text-xs text-[#6a7ea8]">该区间净值数据不足，无法绘制曲线。</p>
       )}
       {!loading && !error && data && data.points.length >= 2 && (
-        <div ref={chartShellRef} className="relative mt-2 w-full">
+        <div ref={chartShellRef} className="relative mt-1.5 w-full">
           {tipPos && hoverRow && (
             <div
               className="pointer-events-none absolute z-20 min-w-[11rem] max-w-[min(15rem,calc(100%-1rem))] rounded-lg border border-[#dbe5ff] bg-white/95 px-3 py-2 text-xs leading-snug shadow-lg backdrop-blur-[2px]"
@@ -455,7 +455,7 @@ export function FundNavChart({ fundCode }: Props) {
               d={paths.lineD}
               fill="none"
               stroke="#1677ff"
-              strokeWidth={2}
+              strokeWidth={1.2}
               strokeLinejoin="round"
               strokeLinecap="round"
             />

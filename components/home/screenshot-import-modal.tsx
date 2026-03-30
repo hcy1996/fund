@@ -1,9 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import type { ScreenshotParsedRow } from "@/services/screenshotImportService";
+import type { FundCategoryTreeNode } from "@/services/fundCategoryService";
+import { useMessage } from "@/components/common/message-provider";
 
-type RowEdit = ScreenshotParsedRow & { id: string };
+type RowEdit = ScreenshotParsedRow & { id: string; categoryId: string | null };
 
 function newRowId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -54,19 +56,53 @@ export function ScreenshotImportModal({ open, onClose, onImported, defaultAccoun
   const titleId = useId();
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [phase, setPhase] = useState<"pick" | "parsing" | "preview" | "submitting">("pick");
-  const [message, setMessage] = useState<string | null>(null);
   const [rows, setRows] = useState<RowEdit[]>([]);
   const [syncWatchlist, setSyncWatchlist] = useState(false);
   const [accounts, setAccounts] = useState<AccountItem[]>([]);
   const [accountId, setAccountId] = useState("");
+  const message = useMessage();
+  const [categoryTree, setCategoryTree] = useState<FundCategoryTreeNode[]>([]);
+
+  const smallCategoryOptions = useMemo(() => {
+    return categoryTree.flatMap((big) =>
+      big.children.map((c) => ({
+        id: c.id,
+        label: `${big.name}-${c.name}`,
+      })),
+    );
+  }, [categoryTree]);
+
+  const readStoredCategoryIdByCode = useCallback((): Record<string, string> => {
+    if (typeof window === "undefined") return {};
+    const key = "fund:screenshotImport:smallCategoryByCode:v1";
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return {};
+      const parsed = JSON.parse(raw) as unknown;
+      if (!parsed || typeof parsed !== "object") return {};
+      return parsed as Record<string, string>;
+    } catch {
+      return {};
+    }
+  }, []);
+
+  const writeStoredCategoryIdByCode = useCallback((next: Record<string, string>) => {
+    if (typeof window === "undefined") return;
+    const key = "fund:screenshotImport:smallCategoryByCode:v1";
+    try {
+      localStorage.setItem(key, JSON.stringify(next));
+    } catch {
+      // ignore
+    }
+  }, []);
 
   const reset = useCallback(() => {
     setPhase("pick");
-    setMessage(null);
     setRows([]);
     setSyncWatchlist(false);
     setAccounts([]);
     setAccountId("");
+    setCategoryTree([]);
     if (fileInputRef.current) fileInputRef.current.value = "";
   }, []);
 
@@ -88,13 +124,60 @@ export function ScreenshotImportModal({ open, onClose, onImported, defaultAccoun
     })();
   }, [open, defaultAccountId]);
 
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await fetch("/api/fund-categories");
+        if (!res.ok) return;
+        const data = (await res.json()) as { categories?: FundCategoryTreeNode[] };
+        if (cancelled) return;
+        setCategoryTree(Array.isArray(data.categories) ? data.categories : []);
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  const isRowValidForImport = useCallback((r: RowEdit) => {
+    const code = r.fundCode.trim();
+    const shares = r.shares ?? NaN;
+    const costPrice = r.costPrice ?? NaN;
+    return (
+      /^\d{6}$/.test(code) &&
+      Number.isFinite(shares) &&
+      shares > 0 &&
+      Number.isFinite(costPrice) &&
+      costPrice >= 0
+    );
+  }, []);
+
+  const tryLoadCategoryByCode = useCallback(
+    async (rowId: string, code: string) => {
+      // 后端：以已配置的小类为准；若后端没配置，则保留本地兜底值
+      try {
+        const res = await fetch(`/api/funds/category?code=${encodeURIComponent(code)}`);
+        if (!res.ok) return;
+        const data = (await res.json()) as { categoryId: string | null; label: string | null };
+        if (!data.categoryId) return;
+        setRows((prev) => prev.map((r) => (r.id === rowId ? { ...r, categoryId: data.categoryId } : r)));
+      } catch {
+        // ignore
+      }
+    },
+    [],
+  );
+
   const runParseFile = useCallback(async (file: File) => {
     const max = 8 * 1024 * 1024;
     if (file.size > max) {
-      setMessage(`图片须小于 ${Math.floor(max / (1024 * 1024))}MB`);
+      message.error(`图片须小于 ${Math.floor(max / (1024 * 1024))}MB`);
       return;
     }
-    setMessage(null);
     setPhase("parsing");
     try {
       const { base64, mediaType } = await fileToBase64AndMime(file);
@@ -114,23 +197,56 @@ export function ScreenshotImportModal({ open, onClose, onImported, defaultAccoun
             : res.status === 503
               ? "未配置识别服务密钥，请联系管理员"
               : "识别请求失败";
-        setMessage(err);
+        message.error(err);
         setPhase("pick");
         return;
       }
       const list = Array.isArray(data.rows) ? data.rows : [];
       if (list.length === 0) {
-        setMessage("未从截图中识别到基金持仓，请换一张或检查清晰度");
+        message.error("未从截图中识别到基金持仓，请换一张或检查清晰度");
         setPhase("pick");
         return;
       }
-      setRows(list.map((r) => ({ ...r, id: newRowId() })));
+
+      const stored = readStoredCategoryIdByCode();
+      const nextRows: RowEdit[] = list.map((r) => {
+        const code = r.fundCode?.trim?.() ? String(r.fundCode).trim() : "";
+        return {
+          ...(r as ScreenshotParsedRow),
+          id: newRowId(),
+          categoryId: code ? stored[code] ?? null : null,
+        };
+      });
+
+      setRows(nextRows);
       setPhase("preview");
+
+      // 后端回填：优先使用后台已设置的小类（如果有）
+      void (async () => {
+        const codes = nextRows
+          .map((r) => r.fundCode.trim())
+          .filter((c) => /^\d{6}$/.test(c));
+        const uniqueCodes = Array.from(new Set(codes));
+        if (uniqueCodes.length === 0) return;
+
+        // 逐行回填，避免一个代码对应多个行时状态错位
+        await Promise.allSettled(
+          nextRows.map(async (row) => {
+            const code = row.fundCode.trim();
+            if (!/^\d{6}$/.test(code)) return;
+            if (!code) return;
+            if (row.categoryId) {
+              // 本地已兜底：仍然尝试拉取后台（若后台无配置则保持本地）
+            }
+            await tryLoadCategoryByCode(row.id, code);
+          }),
+        );
+      })();
     } catch {
-      setMessage("读取或上传失败，请重试");
+      message.error("读取或上传失败，请重试");
       setPhase("pick");
     }
-  }, []);
+  }, [message, readStoredCategoryIdByCode, tryLoadCategoryByCode]);
 
   useEffect(() => {
     if (!open) return;
@@ -153,27 +269,54 @@ export function ScreenshotImportModal({ open, onClose, onImported, defaultAccoun
 
   const handleImport = async () => {
     if (!accountId) {
-      setMessage("请先选择导入账户");
+      message.error("请先选择导入账户");
       return;
     }
-    const items = rows
-      .map((r) => ({
-        fundCode: r.fundCode.trim(),
-        fundName: r.fundName?.trim() || undefined,
-        shares: r.shares ?? NaN,
-        costPrice: r.costPrice ?? NaN,
-      }))
-      .filter((r) => /^\d{6}$/.test(r.fundCode) && Number.isFinite(r.shares) && r.shares > 0 &&
-        Number.isFinite(r.costPrice) && r.costPrice >= 0);
+    const validRows = rows.filter((r) => isRowValidForImport(r));
+    const missingCategoryRow = validRows.find((r) => !r.categoryId);
+
+    if (missingCategoryRow) {
+      const code = missingCategoryRow.fundCode.trim();
+      message.error(`代码 ${code} 的这行尚未选择“小类”。`);
+      return;
+    }
+
+    const items = validRows.map((r) => ({
+      fundCode: r.fundCode.trim(),
+      fundName: r.fundName?.trim() || undefined,
+      shares: r.shares ?? NaN,
+      costPrice: r.costPrice ?? NaN,
+    }));
 
     if (items.length === 0) {
-      setMessage("请至少保留一行有效数据：6 位代码、份额 > 0、成本 ≥ 0");
+      message.error("请至少保留一行有效数据：6 位代码、份额 > 0、成本 ≥ 0");
       return;
     }
 
-    setMessage(null);
     setPhase("submitting");
     try {
+      // 先把每行选择的小类落到基金配置里：导入接口本身会校验“小类”存在
+      const unique = new Map<string, string>();
+      for (const r of validRows) {
+        unique.set(r.fundCode.trim(), r.categoryId!);
+      }
+      const putErrors: string[] = [];
+      for (const [code, categoryId] of unique.entries()) {
+        const res = await fetch("/api/funds/category", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ code, categoryId }),
+        });
+        if (!res.ok) {
+          putErrors.push(`${code}: 设置小类失败`);
+        }
+      }
+      if (putErrors.length) {
+        message.error(`设置分类失败：${putErrors.slice(0, 3).join("；")}`);
+        setPhase("preview");
+        return;
+      }
+
       const res = await fetch("/api/holdings/import", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -186,16 +329,20 @@ export function ScreenshotImportModal({ open, onClose, onImported, defaultAccoun
         errors?: string[];
       };
       if (!res.ok) {
-        setMessage(typeof data.error === "string" ? data.error : "导入失败");
+        message.error(typeof data.error === "string" ? data.error : "导入失败");
         setPhase("preview");
         return;
       }
       const errs = data.errors?.length ? `部分失败：${data.errors.slice(0, 3).join("；")}` : "";
-      if (errs) setMessage(errs);
+      if (errs) message.error(errs);
+      // 把本次选择缓存到本地，下一次截图导入可直接回填
+      const stored = readStoredCategoryIdByCode();
+      for (const r of validRows) stored[r.fundCode.trim()] = r.categoryId!;
+      writeStoredCategoryIdByCode(stored);
       onImported();
       handleClose();
     } catch {
-      setMessage("导入失败，请重试");
+      message.error("导入失败，请重试");
       setPhase("preview");
     }
   };
@@ -212,7 +359,7 @@ export function ScreenshotImportModal({ open, onClose, onImported, defaultAccoun
         if (e.target === e.currentTarget) handleClose();
       }}
     >
-      <div className="max-h-[90vh] w-full max-w-lg overflow-hidden rounded-xl border border-[#dbe5ff] bg-white shadow-xl">
+      <div className="max-h-[90vh] w-full max-w-3xl overflow-hidden rounded-xl border border-[#dbe5ff] bg-white shadow-xl">
         <div className="flex items-center justify-between border-b border-[#e8efff] px-4 py-3">
           <h2 id={titleId} className="text-base font-semibold text-[#1f2a44]">
             截图导入持仓
@@ -256,13 +403,14 @@ export function ScreenshotImportModal({ open, onClose, onImported, defaultAccoun
                 请核对下列数据。已持有的基金将更新为表格中的份额与成本。
               </p>
               <div className="overflow-x-auto rounded-lg border border-[#e8efff]">
-                <table className="w-full min-w-[520px] border-collapse text-left text-xs">
+                <table className="w-full min-w-[720px] border-collapse text-left text-xs">
                   <thead className="bg-[#f5f8ff] text-[#5e6f95]">
                     <tr>
                       <th className="px-2 py-2 font-medium">代码</th>
                       <th className="px-2 py-2 font-medium">名称</th>
                       <th className="px-2 py-2 font-medium">份额</th>
                       <th className="px-2 py-2 font-medium">成本</th>
+                      <th className="px-2 py-2 font-medium">小类</th>
                       <th className="w-10 px-1 py-2" />
                     </tr>
                   </thead>
@@ -273,13 +421,29 @@ export function ScreenshotImportModal({ open, onClose, onImported, defaultAccoun
                           <input
                             className="w-full rounded border border-[#dbe5ff] bg-white px-1 py-0.5 font-mono text-[11px] outline-none focus:ring-1 focus:ring-[#1677ff]"
                             value={r.fundCode}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const nextCode = e.target.value;
+                              const trimmed = nextCode.trim();
+                              const stored = readStoredCategoryIdByCode();
+                              const nextCategoryId =
+                                /^\d{6}$/.test(trimmed) && stored[trimmed] ? stored[trimmed] : null;
+
                               setRows((prev) =>
                                 prev.map((x) =>
-                                  x.id === r.id ? { ...x, fundCode: e.target.value } : x,
+                                  x.id === r.id
+                                    ? {
+                                        ...x,
+                                        fundCode: nextCode,
+                                        categoryId: nextCategoryId,
+                                      }
+                                    : x,
                                 ),
-                              )
-                            }
+                              );
+
+                              if (/^\d{6}$/.test(trimmed)) {
+                                void tryLoadCategoryByCode(r.id, trimmed);
+                              }
+                            }}
                           />
                         </td>
                         <td className="px-2 py-1.5">
@@ -350,6 +514,39 @@ export function ScreenshotImportModal({ open, onClose, onImported, defaultAccoun
                             }}
                           />
                         </td>
+                        <td className="px-2 py-1.5">
+                          <select
+                            className={[
+                              "w-full rounded border bg-white px-2 py-1 text-xs outline-none focus:ring-1 focus:ring-[#1677ff]",
+                              isRowValidForImport(r) && !r.categoryId
+                                ? "border-red-300"
+                                : "border-[#dbe5ff]",
+                            ].join(" ")}
+                            value={r.categoryId ?? ""}
+                            disabled={
+                              !/^\d{6}$/.test(r.fundCode.trim()) || smallCategoryOptions.length === 0
+                            }
+                            onChange={(e) => {
+                              const nextId = e.target.value ? e.target.value : null;
+                              setRows((prev) =>
+                                prev.map((x) => (x.id === r.id ? { ...x, categoryId: nextId } : x)),
+                              );
+                              const code = r.fundCode.trim();
+                              if (!code) return;
+                              const stored = readStoredCategoryIdByCode();
+                              if (nextId) stored[code] = nextId;
+                              else delete stored[code];
+                              writeStoredCategoryIdByCode(stored);
+                            }}
+                          >
+                            <option value="">请选择小类</option>
+                            {smallCategoryOptions.map((opt) => (
+                              <option key={opt.id} value={opt.id}>
+                                {opt.label}
+                              </option>
+                            ))}
+                          </select>
+                        </td>
                         <td className="px-1 py-1.5 text-center">
                           <button
                             type="button"
@@ -417,11 +614,6 @@ export function ScreenshotImportModal({ open, onClose, onImported, defaultAccoun
             </div>
           )}
 
-          {message && (
-            <p className="mt-3 text-xs text-red-600" role="alert">
-              {message}
-            </p>
-          )}
         </div>
       </div>
     </div>

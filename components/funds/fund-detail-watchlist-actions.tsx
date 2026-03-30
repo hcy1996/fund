@@ -20,7 +20,7 @@ export function FundDetailWatchlistActions({ fundCode, fundName }: Props) {
       <button
         type="button"
         onClick={() => setDrawerOpen(true)}
-        className="shrink-0 rounded-lg border border-[#1677ff] bg-[#eaf4ff] px-3 py-1.5 text-xs font-medium text-[#1677ff] hover:bg-[#d9e8ff] sm:text-sm"
+        className="shrink-0 rounded-lg border border-[#1677ff] bg-[#eaf4ff] px-3 py-1.5 text-xs font-medium text-[#1677ff] hover:bg-[#d9e8ff] sm:text-sm flex items-center justify-center leading-none"
       >
         自选分组
       </button>

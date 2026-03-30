@@ -1,0 +1,99 @@
+<h2>统计表格：新增百分比列 + 扇形图</h2>
+<p class="subtitle">目标：去掉“求和”列；改成“小类占大类%”；再加“大类占全部%”，并用扇形图可视化展示。</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>环形图放表格上方（推荐）</h3>
+      <p>表格保持紧凑；上方一个环形图展示各大类占比（全部=100%）。</p>
+      <div class="mockup">
+        <div class="mockup-header">预览</div>
+        <div class="mockup-body">
+          <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+            <svg width="120" height="120" viewBox="0 0 42 42" aria-hidden>
+              <circle cx="21" cy="21" r="15.915" fill="transparent" stroke="#e8efff" stroke-width="6"></circle>
+              <circle cx="21" cy="21" r="15.915" fill="transparent" stroke="#1677ff" stroke-width="6" stroke-dasharray="55 45" stroke-dashoffset="25"></circle>
+              <circle cx="21" cy="21" r="15.915" fill="transparent" stroke="#ffb020" stroke-width="6" stroke-dasharray="25 75" stroke-dashoffset="-30"></circle>
+              <circle cx="21" cy="21" r="15.915" fill="transparent" stroke="#00b96b" stroke-width="6" stroke-dasharray="20 80" stroke-dashoffset="-55"></circle>
+              <circle cx="21" cy="21" r="11" fill="#fff"></circle>
+            </svg>
+            <div style="min-width:220px">
+              <div style="font-size:12px;color:#4d5f87;margin-bottom:6px">大类占比（全部）</div>
+              <div style="display:grid;grid-template-columns:auto 1fr;gap:6px 10px;font-size:12px">
+                <div><span style="display:inline-block;width:10px;height:10px;background:#1677ff;border-radius:2px;margin-right:6px"></span>债券</div><div style="text-align:right;color:#1f2a44">55%</div>
+                <div><span style="display:inline-block;width:10px;height:10px;background:#ffb020;border-radius:2px;margin-right:6px"></span>股基</div><div style="text-align:right;color:#1f2a44">25%</div>
+                <div><span style="display:inline-block;width:10px;height:10px;background:#00b96b;border-radius:2px;margin-right:6px"></span>大宗</div><div style="text-align:right;color:#1f2a44">20%</div>
+              </div>
+            </div>
+          </div>
+          <div style="margin-top:10px;border-top:1px solid #edf2ff;padding-top:10px;font-size:12px;color:#4d5f87">
+            表格列：大类｜小类｜代码｜基金名称｜小类/大类%｜大类/全部%｜持有金额
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>扇形图放在“大类小计行”右侧</h3>
+      <p>每个大类一行小图（饼图），直观看该大类内部小类分布；同时保留大类占全部%。</p>
+      <div class="mockup">
+        <div class="mockup-header">预览</div>
+        <div class="mockup-body">
+          <div style="font-size:12px;color:#4d5f87;margin-bottom:8px">大类小计行示意</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;border:1px solid #e4ecff;border-radius:8px;padding:10px;background:#f0f4ff">
+            <div style="font-size:13px;color:#1f2a44;font-weight:600">小计（债券）</div>
+            <div style="display:flex;align-items:center;gap:12px">
+              <div style="text-align:right">
+                <div style="font-size:11px;color:#4d5f87">大类/全部</div>
+                <div style="font-size:13px;color:#1f2a44;font-weight:600">55%</div>
+              </div>
+              <svg width="44" height="44" viewBox="0 0 32 32" aria-hidden>
+                <circle r="16" cx="16" cy="16" fill="#fff"></circle>
+                <path d="M16 16 L16 0 A16 16 0 0 1 30.8 11.4 Z" fill="#1677ff"></path>
+                <path d="M16 16 L30.8 11.4 A16 16 0 0 1 20.2 31.1 Z" fill="#ffb020"></path>
+                <path d="M16 16 L20.2 31.1 A16 16 0 0 1 16 0 Z" fill="#00b96b"></path>
+              </svg>
+            </div>
+          </div>
+          <div style="margin-top:10px;border-top:1px solid #edf2ff;padding-top:10px;font-size:12px;color:#4d5f87">
+            表格列：大类｜小类｜代码｜基金名称｜小类/大类%｜持有金额｜（大类小计行额外显示小图）
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>仅在表头放小型扇形图（最省空间）</h3>
+      <p>表头右上角一个小饼图 + 悬浮提示；表格内只显示两列百分比。</p>
+      <div class="mockup">
+        <div class="mockup-header">预览</div>
+        <div class="mockup-body">
+          <div style="display:flex;align-items:center;justify-content:space-between;border:1px solid #e4ecff;border-radius:8px;padding:10px;background:#f5f8ff">
+            <div style="font-size:12px;color:#4d5f87">表头（右侧小图）</div>
+            <svg width="38" height="38" viewBox="0 0 32 32" aria-hidden>
+              <circle r="16" cx="16" cy="16" fill="#fff"></circle>
+              <path d="M16 16 L16 0 A16 16 0 0 1 30.8 11.4 Z" fill="#1677ff"></path>
+              <path d="M16 16 L30.8 11.4 A16 16 0 0 1 20.2 31.1 Z" fill="#ffb020"></path>
+              <path d="M16 16 L20.2 31.1 A16 16 0 0 1 16 0 Z" fill="#00b96b"></path>
+            </svg>
+          </div>
+          <div style="margin-top:10px;border-top:1px solid #edf2ff;padding-top:10px;font-size:12px;color:#4d5f87">
+            表格列：大类｜小类｜代码｜基金名称｜小类/大类%｜大类/全部%｜持有金额
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="label">点击选择后，在终端回复</div>
+  <p class="subtitle">告诉我你选 A/B/C；以及扇形图要饼图还是环形图（A 默认环形）。</p>
+</div>

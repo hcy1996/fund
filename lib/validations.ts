@@ -77,3 +77,25 @@ export const holdingsImportBodySchema = z.object({
   syncWatchlist: z.boolean().optional(),
   accountId: z.string().min(1).optional(),
 });
+
+export const fundCategoryCreateSchema = z.object({
+  name: z.string().min(1, "分类名不能为空").max(50, "分类名最多 50 字"),
+  /** null 表示大类；传入 id 表示小类 */
+  parentId: z.string().min(1).optional().nullable(),
+  sortOrder: z.coerce.number().int().optional(),
+});
+
+export const fundCategoryUpdateSchema = z.object({
+  name: z.string().min(1, "分类名不能为空").max(50, "分类名最多 50 字").optional(),
+  sortOrder: z.coerce.number().int().optional(),
+});
+
+export const accountOwnerCreateSchema = z.object({
+  name: z.string().min(1, "归属人名不能为空").max(30, "归属人名最多 30 字"),
+  sortOrder: z.coerce.number().int().optional(),
+});
+
+export const accountOwnerUpdateSchema = z.object({
+  name: z.string().min(1, "归属人名不能为空").max(30, "归属人名最多 30 字").optional(),
+  sortOrder: z.coerce.number().int().optional(),
+});

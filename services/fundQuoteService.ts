@@ -34,6 +34,28 @@ function getCnDateInfo(now: Date = new Date()) {
   };
 }
 
+function getQdiiExpectedNavDate(now: Date = new Date()) {
+  const t = dayjs.utc(now).utcOffset(8).startOf("day");
+  const day = t.day();
+  if (day === 1) return t.subtract(3, "day").format("YYYY-MM-DD");
+  if (day >= 2 && day <= 5) return t.subtract(1, "day").format("YYYY-MM-DD");
+  if (day === 6) return t.subtract(1, "day").format("YYYY-MM-DD");
+  return t.subtract(2, "day").format("YYYY-MM-DD");
+}
+
+function isSameCnDay(dateTime: string | undefined, today: string) {
+  if (!dateTime) return false;
+  return dateTime.slice(0, 10) === today;
+}
+
+function getDatePart(dateTime: string | undefined) {
+  return dateTime ? dateTime.slice(0, 10) : undefined;
+}
+
+function isQdiiFund(name: string | undefined) {
+  return /qdii/i.test(name ?? "");
+}
+
 /** 略短于 fundgz fetch revalidate(30s)，跨请求合并同一基金行情，减轻东财与并发穿透 */
 const FUND_QUOTE_CACHE_SECONDS = 25;
 
@@ -62,16 +84,37 @@ async function buildFundQuote(fundCode: string): Promise<FundQuote> {
   const officialChangeRate = parseChangeRate(latestNavRaw?.changeRate);
 
   // 展示规则：
-  // 1) 周末：使用最近已发布正式净值（通常为周五）
-  // 2) 工作日：若今日正式净值已发布则用正式值，否则用估算净值
+  // 1) 今日正式净值已发布：显示正式净值
+  // 2) 今日正式净值未发布，但今日估值仍有效：显示估算净值
+  // 3) 否则回退到最近正式净值（如周末、节假日、盘前）
   const { today, day } = getCnDateInfo();
   const isWeekend = day === 0 || day === 6;
   const hasTodayOfficialNav = navDate === today && navFromLatest !== undefined;
+  const hasTodayEstimateNav = isSameCnDay(raw?.gztime, today) && estimateNav !== undefined;
+  const estimateDate = getDatePart(raw?.gztime);
+  const isQdii = isQdiiFund(raw?.name);
+  const qdiiExpectedNavDate = getQdiiExpectedNavDate();
+  const hasFreshQdiiOfficialNav =
+    isQdii &&
+    navFromLatest !== undefined &&
+    latestNavRaw?.navDate !== undefined &&
+    latestNavRaw.navDate >= qdiiExpectedNavDate;
+  const hasStaleQdiiOfficialNav =
+    isQdii &&
+    navFromLatest !== undefined &&
+    latestNavRaw?.navDate !== undefined &&
+    latestNavRaw.navDate < qdiiExpectedNavDate;
+  const hasNewerEstimateDate =
+    estimateNav !== undefined &&
+    estimateDate !== undefined &&
+    (latestNavRaw?.navDate === undefined || estimateDate > latestNavRaw.navDate);
 
   let displayNav: number | undefined;
-  let navSource: "estimate" | "official" | undefined;
+  let navSource: "estimate" | "official" | "stale" | undefined;
   let dailyChangeRate: number | undefined;
-  if (isWeekend) {
+  if (hasFreshQdiiOfficialNav) {
+    // QDII 只按周末规则推导“应更新日期”：
+    // 周一 -> 上周五；周二到周五 -> 前一个自然日；周六/周日 -> 上周五。
     displayNav = navFromLatest ?? navFromGz ?? estimateNav;
     navSource =
       navFromLatest !== undefined || navFromGz !== undefined
@@ -80,12 +123,33 @@ async function buildFundQuote(fundCode: string): Promise<FundQuote> {
           ? "estimate"
           : undefined;
     dailyChangeRate = navSource === "official" ? officialChangeRate : estimateChangeRate;
-  } else if (trading && estimateNav !== undefined) {
-    // 盘中（含东财已返回 gsz 时）：优先用实时估值，避免 lsjz 日期恰好为当日时误判为「已更新正式净值」
+  } else if (hasStaleQdiiOfficialNav) {
+    displayNav = estimateNav ?? navFromLatest ?? navFromGz;
+    navSource = estimateNav !== undefined ? "estimate" : "stale";
+    dailyChangeRate =
+      navSource === "estimate"
+        ? estimateChangeRate ?? officialChangeRate
+        : officialChangeRate;
+  } else if (hasNewerEstimateDate) {
+    // 估值日期只要晚于最新正式净值日期，就继续显示估值。
+    // 这能覆盖 QDII 正式净值披露滞后（常见 T+2）以及普通基金收盘后正式净值未出的场景。
     displayNav = estimateNav ?? navFromLatest ?? navFromGz;
     navSource = "estimate";
     dailyChangeRate = estimateChangeRate ?? officialChangeRate;
   } else if (hasTodayOfficialNav) {
+    displayNav = navFromLatest ?? navFromGz ?? estimateNav;
+    navSource =
+      navFromLatest !== undefined || navFromGz !== undefined
+        ? "official"
+        : estimateNav !== undefined
+          ? "estimate"
+          : undefined;
+    dailyChangeRate = navSource === "official" ? officialChangeRate : estimateChangeRate;
+  } else if (hasTodayEstimateNav) {
+    displayNav = estimateNav ?? navFromLatest ?? navFromGz;
+    navSource = "estimate";
+    dailyChangeRate = estimateChangeRate ?? officialChangeRate;
+  } else if (isWeekend) {
     displayNav = navFromLatest ?? navFromGz ?? estimateNav;
     navSource =
       navFromLatest !== undefined || navFromGz !== undefined

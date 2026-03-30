@@ -1,0 +1,43 @@
+{
+    "BadgeContent": 2,
+    "BadgeType": 2,
+    "RealtimeFundcode": null,
+    "chooseListGroup": [
+        {
+            "funds": [],
+            "name": "默认分组"
+        }
+    ],
+    "currentGroupIndex": 1,
+    "darkMode": false,
+    "fundList": [],
+    "fundListGroup": [
+        {
+            "funds": [
+                { "code": "018590", "cost": "2.0678", "num": "6286.98" }
+            ],
+            "name": "默认分组"
+        },
+        {
+            "funds": [{ "code": "015916", "cost": "1.6779", "num": "7140.3" }],
+            "name": "测试"
+        }
+    ],
+    "fundListM": [],
+    "grayscaleValue": 0,
+    "isLiveUpdate": true,
+    "mpVersion": "2.5.3",
+    "normalFontSize": false,
+    "opacityValue": 0,
+    "openGroup": true,
+    "seciList": ["1.000001", "0.399006", "1.000300", "1.000688"],
+    "showAmount": true,
+    "showBadge": 2,
+    "showCost": true,
+    "showCostRate": true,
+    "showGSZ": false,
+    "showGains": true,
+    "sortTypeObj": { "name": "amount", "type": "desc" },
+    "userId": "70d544b4-5167-46a9-9066-affba1843a44",
+    "version": "3.4.0"
+}

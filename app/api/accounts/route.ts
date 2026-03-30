@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
-import { listAccountsForUser, createAccountForUser } from "@/services/accountService";
+import { createAccountForUser, listAccountsForUser } from "@/services/accountService";
 
 export async function GET() {
   const session = await auth();
@@ -29,7 +29,15 @@ export async function POST(req: Request) {
     typeof (body as { name?: unknown }).name === "string"
       ? (body as { name: string }).name
       : "";
-  const acc = await createAccountForUser(session.user.id, name);
+  const owner =
+    body &&
+    typeof body === "object" &&
+    "owner" in body &&
+    typeof (body as { owner?: unknown }).owner === "string"
+      ? ((body as { owner: string }).owner as string)
+      : null;
+
+  const acc = await createAccountForUser(session.user.id, name, owner);
   return NextResponse.json(acc, { status: 201 });
 }
 
