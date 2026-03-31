@@ -17,6 +17,36 @@ export type HoldingsDebugTimings = {
   quotePerCode?: Array<{ code: string; ms: number }>;
 };
 
+async function mapWithConcurrencyLimit<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const n = Math.max(1, Math.floor(limit));
+  if (items.length === 0) return [];
+  if (n === 1 || items.length === 1) {
+    const out: R[] = [];
+    for (let i = 0; i < items.length; i++) {
+      out.push(await mapper(items[i]!, i));
+    }
+    return out;
+  }
+
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= items.length) return;
+      results[idx] = await mapper(items[idx]!, idx);
+    }
+  }
+
+  const workerCount = Math.min(n, items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
 export async function listHoldingsForUser(
   userId: string,
   accountId?: string,
@@ -35,14 +65,13 @@ export async function listHoldingsForUser(
   // 同一请求内：如果同一只基金在多条 holding 里出现，只取一次行情，显著降低外部接口调用次数
   const uniqueCodes = Array.from(new Set(rows.map((h) => h.fund.code)));
   const t0 = Date.now();
-  const uniqueQuotes = await Promise.all(
-    uniqueCodes.map(async (code) => {
-      const t1 = Date.now();
-      const q = await getFundQuote(code);
-      const ms = Date.now() - t1;
-      return opts?.debug ? { code, q, ms } : { code, q, ms: 0 };
-    }),
-  );
+  const quoteConcurrency = Number(process.env.FUND_QUOTE_CONCURRENCY_LIMIT ?? 3);
+  const uniqueQuotes = await mapWithConcurrencyLimit(uniqueCodes, quoteConcurrency, async (code) => {
+    const t1 = Date.now();
+    const q = await getFundQuote(code);
+    const ms = Date.now() - t1;
+    return opts?.debug ? { code, q, ms } : { code, q, ms: 0 };
+  });
   const quoteMsTotal = Date.now() - t0;
   const perCode = opts?.debug ? uniqueQuotes.map((x) => ({ code: x.code, ms: x.ms })) : undefined;
   const quoteMsMax = opts?.debug ? Math.max(...(perCode?.map((x) => x.ms) ?? [0])) : 0;
@@ -159,14 +188,13 @@ export async function listHoldingsForUserByAccountIds(
   // 同一请求内：对 fundCode 去重，避免重复请求行情
   const uniqueCodes = Array.from(new Set(rows.map((h) => h.fund.code)));
   const t0 = Date.now();
-  const uniqueQuotes = await Promise.all(
-    uniqueCodes.map(async (code) => {
-      const t1 = Date.now();
-      const q = await getFundQuote(code);
-      const ms = Date.now() - t1;
-      return opts?.debug ? { code, q, ms } : { code, q, ms: 0 };
-    }),
-  );
+  const quoteConcurrency = Number(process.env.FUND_QUOTE_CONCURRENCY_LIMIT ?? 3);
+  const uniqueQuotes = await mapWithConcurrencyLimit(uniqueCodes, quoteConcurrency, async (code) => {
+    const t1 = Date.now();
+    const q = await getFundQuote(code);
+    const ms = Date.now() - t1;
+    return opts?.debug ? { code, q, ms } : { code, q, ms: 0 };
+  });
   const quoteMsTotal = Date.now() - t0;
   const perCode = opts?.debug ? uniqueQuotes.map((x) => ({ code: x.code, ms: x.ms })) : undefined;
   const quoteMsMax = opts?.debug ? Math.max(...(perCode?.map((x) => x.ms) ?? [0])) : 0;
