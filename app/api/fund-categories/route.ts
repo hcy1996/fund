@@ -1,22 +1,14 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { withAuth } from "@/lib/routeAuth";
 import { fundCategoryCreateSchema } from "@/lib/validations";
 import { createFundCategory, listFundCategoryTree } from "@/services/fundCategoryService";
 
-export async function GET() {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+export const GET = withAuth(async () => {
   const data = await listFundCategoryTree();
   return NextResponse.json({ categories: data });
-}
+});
 
-export async function POST(req: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+export const POST = withAuth(async (req) => {
   let body: unknown;
   try {
     body = await req.json();
@@ -40,4 +32,4 @@ export async function POST(req: Request) {
   }
 
   return NextResponse.json(row, { status: 201 });
-}
+});

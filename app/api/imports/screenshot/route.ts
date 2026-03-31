@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { withAuth } from "@/lib/routeAuth";
 import { screenshotUploadSchema } from "@/lib/validations";
 import {
   ERR_NO_VISION_KEY,
@@ -8,12 +8,7 @@ import {
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 
-export async function POST(req: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
-
+export const POST = withAuth(async (req) => {
   let body: unknown;
   try {
     body = await req.json();
@@ -67,4 +62,4 @@ export async function POST(req: Request) {
     }
     return NextResponse.json({ error: `识别失败：${msg}` }, { status: 502 });
   }
-}
+});

@@ -38,7 +38,7 @@ function num100(v: number | undefined): number | null {
 
 async function fetchIndexQuoteUncached(secid: string): Promise<{ code: string; name: string; price: number; prevClose: number } | null> {
   const url = `https://push2.eastmoney.com/api/qt/stock/get?secid=${encodeURIComponent(secid)}&fields=f43,f57,f58,f60`;
-  const res = await fetch(url, { headers: DEFAULT_HEADERS, next: { revalidate: 10 } });
+  const res = await fetch(url, { headers: DEFAULT_HEADERS, cache: "no-store" });
   if (!res.ok) return null;
   const json = (await res.json()) as EastMoneyQuoteResp;
   const code = json.data?.f57?.trim() || "";
@@ -51,7 +51,7 @@ async function fetchIndexQuoteUncached(secid: string): Promise<{ code: string; n
 
 async function fetchIndexTrendsUncached(secid: string): Promise<Array<{ t: string; price: number }>> {
   const url = `https://push2his.eastmoney.com/api/qt/stock/trends2/get?secid=${encodeURIComponent(secid)}&fields1=f1,f2&fields2=f51,f53,f56&ndays=1`;
-  const res = await fetch(url, { headers: DEFAULT_HEADERS, next: { revalidate: 10 } });
+  const res = await fetch(url, { headers: DEFAULT_HEADERS, cache: "no-store" });
   if (!res.ok) return [];
   const json = (await res.json()) as EastMoneyTrendsResp;
   const rows = json.data?.trends ?? [];
@@ -111,4 +111,3 @@ export const listMarketIndices = unstable_cache(
   ["market-indices-v1"],
   { revalidate: 10 },
 );
-

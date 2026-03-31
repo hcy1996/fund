@@ -1,17 +1,13 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { withAuth } from "@/lib/routeAuth";
 import { deleteAccountForUser, updateAccountForUser } from "@/services/accountService";
 
 type RouteCtx = { params: Promise<{ id: string }> };
 
-export async function DELETE(_req: Request, ctx: RouteCtx) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+export const DELETE = withAuth(async (_req, ctx: RouteCtx, userId) => {
   const { id } = await ctx.params;
   try {
-    const ok = await deleteAccountForUser(session.user.id, id);
+    const ok = await deleteAccountForUser(userId, id);
     if (!ok) {
       return NextResponse.json({ error: "未找到账户" }, { status: 404 });
     }
@@ -22,14 +18,9 @@ export async function DELETE(_req: Request, ctx: RouteCtx) {
       { status: 400 },
     );
   }
-}
+});
 
-export async function PUT(req: Request, ctx: RouteCtx) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
-
+export const PUT = withAuth(async (req, ctx: RouteCtx, userId) => {
   const { id } = await ctx.params;
 
   let body: unknown;
@@ -49,7 +40,7 @@ export async function PUT(req: Request, ctx: RouteCtx) {
     return NextResponse.json({ error: "无更新字段" }, { status: 400 });
   }
 
-  const row = await updateAccountForUser(session.user.id, id, {
+  const row = await updateAccountForUser(userId, id, {
     name: nextName as string | undefined,
     owner: nextOwner as string | undefined,
   });
@@ -58,5 +49,4 @@ export async function PUT(req: Request, ctx: RouteCtx) {
   }
 
   return NextResponse.json(row);
-}
-
+});

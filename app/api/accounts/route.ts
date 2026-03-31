@@ -1,21 +1,13 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { withAuth } from "@/lib/routeAuth";
 import { createAccountForUser, listAccountsForUser } from "@/services/accountService";
 
-export async function GET() {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
-  const accounts = await listAccountsForUser(session.user.id);
+export const GET = withAuth(async (_req, _ctx, userId) => {
+  const accounts = await listAccountsForUser(userId);
   return NextResponse.json(accounts);
-}
+});
 
-export async function POST(req: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+export const POST = withAuth(async (req, _ctx, userId) => {
   let body: unknown;
   try {
     body = await req.json();
@@ -37,7 +29,6 @@ export async function POST(req: Request) {
       ? ((body as { owner: string }).owner as string)
       : null;
 
-  const acc = await createAccountForUser(session.user.id, name, owner);
+  const acc = await createAccountForUser(userId, name, owner);
   return NextResponse.json(acc, { status: 201 });
-}
-
+});

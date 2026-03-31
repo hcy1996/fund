@@ -80,12 +80,64 @@ function getLocalTtlMs() {
   return n;
 }
 
+function getLocalCacheMaxSize() {
+  const raw = process.env.FUND_QUOTE_LOCAL_CACHE_MAX_SIZE;
+  const n = raw ? Number(raw) : NaN;
+  if (!Number.isFinite(n) || n < 100) return 1000;
+  return Math.floor(n);
+}
+
+function getLatestNavSoftTimeoutMs() {
+  const raw = process.env.FUND_QUOTE_LATEST_NAV_SOFT_TIMEOUT_MS;
+  const n = raw ? Number(raw) : NaN;
+  if (!Number.isFinite(n) || n <= 0) return 800;
+  return n;
+}
+
+async function withSoftTimeout<T>(promise: Promise<T>, timeoutMs: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function pruneLocalQuoteCache(now: number) {
+  for (const [k, v] of localQuoteCache.entries()) {
+    if (v.expiresAt <= now) {
+      localQuoteCache.delete(k);
+    }
+  }
+  const max = getLocalCacheMaxSize();
+  if (localQuoteCache.size <= max) return;
+
+  // Map 保持插入顺序，先清理最老 key，避免常驻进程无限增长。
+  const overflow = localQuoteCache.size - max;
+  let removed = 0;
+  for (const key of localQuoteCache.keys()) {
+    localQuoteCache.delete(key);
+    removed++;
+    if (removed >= overflow) break;
+  }
+}
+
 async function buildFundQuote(fundCode: string): Promise<FundQuote> {
   const trading = isTradingTime();
-  const [raw, latestNavRaw] = await Promise.all([
-    fetchFundGzRaw(fundCode),
-    fetchFundLatestNavRaw(fundCode),
-  ]);
+  const rawPromise = fetchFundGzRaw(fundCode);
+  const latestPromise = fetchFundLatestNavRaw(fundCode);
+  const raw = await rawPromise;
+
+  // /api/holdings 等列表接口优先保障响应时间：latestNav 超过软超时则先降级，
+  // 依赖 fundgz 的 dwjz/jzrq 出结果，避免被次要来源长尾拖慢。
+  const latestNavRaw = raw
+    ? await withSoftTimeout(latestPromise, getLatestNavSoftTimeoutMs(), null)
+    : await latestPromise;
 
   if (!raw && !latestNavRaw) {
     return {
@@ -228,6 +280,7 @@ export async function getFundQuote(code: string): Promise<FundQuote> {
   }
 
   const now = Date.now();
+  pruneLocalQuoteCache(now);
   const ttlMs = getLocalTtlMs();
   const existing = localQuoteCache.get(fundCode);
 

@@ -6,6 +6,9 @@ export async function GET() {
   return NextResponse.json({
     asOf: new Date().toISOString(),
     indices,
+  }, {
+    headers: {
+      "Cache-Control": "public, s-maxage=10, stale-while-revalidate=20",
+    },
   });
 }
-

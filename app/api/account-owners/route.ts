@@ -1,23 +1,14 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { withAuth } from "@/lib/routeAuth";
 import { accountOwnerCreateSchema } from "@/lib/validations";
 import { createAccountOwner, listAccountOwners } from "@/services/accountOwnerService";
 
-export async function GET() {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
-  const data = await listAccountOwners(session.user.id);
+export const GET = withAuth(async (_req, _ctx, userId) => {
+  const data = await listAccountOwners(userId);
   return NextResponse.json({ owners: data });
-}
+});
 
-export async function POST(req: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
-
+export const POST = withAuth(async (req, _ctx, userId) => {
   let body: unknown;
   try {
     body = await req.json();
@@ -30,8 +21,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
-  const row = await createAccountOwner(session.user.id, { name: parsed.data.name, sortOrder: parsed.data.sortOrder });
+  const row = await createAccountOwner(userId, { name: parsed.data.name, sortOrder: parsed.data.sortOrder });
   if (!row) return NextResponse.json({ error: "名称已存在" }, { status: 409 });
   return NextResponse.json(row, { status: 201 });
-}
-
+});

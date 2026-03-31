@@ -1,13 +1,9 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { withAuth } from "@/lib/routeAuth";
 import { watchlistGroupReorderSchema } from "@/lib/validations";
 import { reorderWatchlistGroups } from "@/services/watchlistService";
 
-export async function POST(req: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+export const POST = withAuth(async (req, _ctx, userId) => {
   let body: unknown;
   try {
     body = await req.json();
@@ -18,9 +14,9 @@ export async function POST(req: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
-  const ok = await reorderWatchlistGroups(session.user.id, parsed.data.ids);
+  const ok = await reorderWatchlistGroups(userId, parsed.data.ids);
   if (!ok) {
     return NextResponse.json({ error: "排序失败" }, { status: 400 });
   }
   return NextResponse.json({ ok: true });
-}
+});

@@ -1,15 +1,11 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { withAuth } from "@/lib/routeAuth";
 import { fundCategoryUpdateSchema } from "@/lib/validations";
 import { deleteFundCategory, updateFundCategory } from "@/services/fundCategoryService";
 
 type RouteCtx = { params: Promise<{ id: string }> };
 
-export async function PUT(req: Request, ctx: RouteCtx) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+export const PUT = withAuth(async (req, ctx: RouteCtx) => {
   let body: unknown;
   try {
     body = await req.json();
@@ -30,15 +26,11 @@ export async function PUT(req: Request, ctx: RouteCtx) {
   } catch {
     return NextResponse.json({ error: "更新失败" }, { status: 404 });
   }
-}
+});
 
-export async function DELETE(_req: Request, ctx: RouteCtx) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+export const DELETE = withAuth(async (_req, ctx: RouteCtx) => {
   const { id } = await ctx.params;
   const ok = await deleteFundCategory(id);
   if (!ok) return NextResponse.json({ error: "未找到" }, { status: 404 });
   return NextResponse.json({ ok: true });
-}
+});

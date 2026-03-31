@@ -1,14 +1,9 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { withAuth } from "@/lib/routeAuth";
 import { holdingsImportBodySchema } from "@/lib/validations";
 import { importHoldingsBatch } from "@/services/holdingService";
 
-export async function POST(req: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
-
+export const POST = withAuth(async (req, _ctx, userId) => {
   let body: unknown;
   try {
     body = await req.json();
@@ -22,6 +17,6 @@ export async function POST(req: Request) {
   }
 
   const { items, syncWatchlist, accountId } = parsed.data;
-  const result = await importHoldingsBatch(session.user.id, items, { syncWatchlist, accountId });
+  const result = await importHoldingsBatch(userId, items, { syncWatchlist, accountId });
   return NextResponse.json(result);
-}
+});

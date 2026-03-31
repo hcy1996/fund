@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { withAuth } from "@/lib/routeAuth";
 import { DEFAULT_WATCHLIST_GROUP_NAME } from "@/lib/watchlistConstants";
 import {
   deleteWatchlistGroup,
@@ -9,11 +9,7 @@ import { watchlistGroupUpdateSchema } from "@/lib/validations";
 
 type RouteCtx = { params: Promise<{ id: string }> };
 
-export async function PUT(req: Request, ctx: RouteCtx) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+export const PUT = withAuth(async (req, ctx: RouteCtx, userId) => {
   const { id } = await ctx.params;
   let body: unknown;
   try {
@@ -28,7 +24,7 @@ export async function PUT(req: Request, ctx: RouteCtx) {
   if (parsed.data.name === undefined && parsed.data.sortOrder === undefined) {
     return NextResponse.json({ error: "无更新字段" }, { status: 400 });
   }
-  const result = await updateWatchlistGroup(session.user.id, id, parsed.data);
+  const result = await updateWatchlistGroup(userId, id, parsed.data);
   if (!result.ok) {
     if (result.error === "not_found") {
       return NextResponse.json({ error: "分组不存在" }, { status: 404 });
@@ -42,15 +38,11 @@ export async function PUT(req: Request, ctx: RouteCtx) {
     return NextResponse.json({ error: msg }, { status: 400 });
   }
   return NextResponse.json(result.group);
-}
+});
 
-export async function DELETE(_req: Request, ctx: RouteCtx) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+export const DELETE = withAuth(async (_req, ctx: RouteCtx, userId) => {
   const { id } = await ctx.params;
-  const result = await deleteWatchlistGroup(session.user.id, id);
+  const result = await deleteWatchlistGroup(userId, id);
   if (result === "not_found") {
     return NextResponse.json({ error: "分组不存在" }, { status: 404 });
   }
@@ -61,4 +53,4 @@ export async function DELETE(_req: Request, ctx: RouteCtx) {
     );
   }
   return NextResponse.json({ ok: true });
-}
+});

@@ -1,13 +1,9 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { withAuth } from "@/lib/routeAuth";
 import { watchlistItemSyncGroupsSchema } from "@/lib/validations";
 import { syncWatchlistItemGroups } from "@/services/watchlistService";
 
-export async function PUT(req: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+export const PUT = withAuth(async (req, _ctx, userId) => {
   let body: unknown;
   try {
     body = await req.json();
@@ -18,6 +14,6 @@ export async function PUT(req: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
-  await syncWatchlistItemGroups(session.user.id, parsed.data);
+  await syncWatchlistItemGroups(userId, parsed.data);
   return NextResponse.json({ ok: true });
-}
+});

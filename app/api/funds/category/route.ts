@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { withAuth } from "@/lib/routeAuth";
 import { getFundCategoryByCode, setFundCategoryByCode } from "@/services/fundCategoryService";
 
 export async function GET(req: Request) {
@@ -17,11 +17,7 @@ export async function GET(req: Request) {
   });
 }
 
-export async function PUT(req: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+export const PUT = withAuth(async (req) => {
   try {
     const body = (await req.json()) as { code?: string; categoryId?: string | null };
     const code = body.code?.trim();
@@ -39,4 +35,4 @@ export async function PUT(req: Request) {
   } catch {
     return NextResponse.json({ error: "参数错误" }, { status: 400 });
   }
-}
+});

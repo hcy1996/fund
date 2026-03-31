@@ -1,12 +1,8 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { withAuth } from "@/lib/routeAuth";
 import { findHoldingByFundCodeForUser, findHoldingByFundCodeForUserAndAccount } from "@/services/holdingService";
 
-export async function GET(req: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+export const GET = withAuth(async (req, _ctx, userId) => {
   const { searchParams } = new URL(req.url);
   const fundCode = searchParams.get("fundCode")?.trim() ?? "";
   const accountId = searchParams.get("accountId")?.trim() ?? undefined;
@@ -15,7 +11,7 @@ export async function GET(req: Request) {
   }
   const holding =
     accountId && accountId.length > 0
-      ? await findHoldingByFundCodeForUserAndAccount(session.user.id, fundCode, accountId)
-      : await findHoldingByFundCodeForUser(session.user.id, fundCode);
+      ? await findHoldingByFundCodeForUserAndAccount(userId, fundCode, accountId)
+      : await findHoldingByFundCodeForUser(userId, fundCode);
   return NextResponse.json({ holding });
-}
+});

@@ -1,16 +1,12 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { withAuth } from "@/lib/routeAuth";
 import { listHoldingsForUser, listHoldingsForUserByAccountIds, createHolding } from "@/services/holdingService";
 import type { HoldingsDebugTimings } from "@/services/holdingService";
 import { holdingCreateSchema } from "@/lib/validations";
 import { prisma } from "@/lib/prisma";
 import type { HoldingWithProfit } from "@/types/holding";
 
-export async function GET(req: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+export const GET = withAuth(async (req, _ctx, userId) => {
   const { searchParams } = new URL(req.url);
   const accountId = searchParams.get("accountId") || undefined;
   const ownerName = searchParams.get("ownerName") || undefined;
@@ -24,18 +20,18 @@ export async function GET(req: Request) {
     ? await (async () => {
         const tAccounts0 = Date.now();
         const accounts = await prisma.account.findMany({
-          where: { userId: session.user.id, owner: ownerName },
+          where: { userId, owner: ownerName },
           select: { id: true },
         });
         accountsQueryMs = Date.now() - tAccounts0;
         const ids = accounts.map((a) => a.id);
         const tHoldings0 = Date.now();
-        const r = await listHoldingsForUserByAccountIds(session.user.id, ids, { debug });
+        const r = await listHoldingsForUserByAccountIds(userId, ids, { debug });
         holdingsMs = Date.now() - tHoldings0;
         return r;
       })()
     : await (async () => {
-        const r = await listHoldingsForUser(session.user.id, accountId, { debug });
+        const r = await listHoldingsForUser(userId, accountId, { debug });
         return r;
       })();
 
@@ -52,13 +48,9 @@ export async function GET(req: Request) {
   }
 
   return NextResponse.json(dataResult.data);
-}
+});
 
-export async function POST(req: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+export const POST = withAuth(async (req, _ctx, userId) => {
   let body: unknown;
   try {
     body = await req.json();
@@ -73,10 +65,10 @@ export async function POST(req: Request) {
     );
   }
   try {
-    const row = await createHolding(session.user.id, parsed.data);
+    const row = await createHolding(userId, parsed.data);
     return NextResponse.json(row, { status: 201 });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "保存失败";
     return NextResponse.json({ error: msg }, { status: 400 });
   }
-}
+});

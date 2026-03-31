@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { withAuth } from "@/lib/routeAuth";
 import { DEFAULT_WATCHLIST_GROUP_NAME } from "@/lib/watchlistConstants";
 import {
   createWatchlistGroup,
@@ -7,20 +7,12 @@ import {
 } from "@/services/watchlistService";
 import { watchlistGroupCreateSchema } from "@/lib/validations";
 
-export async function GET() {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
-  const data = await listWatchlistGroups(session.user.id);
+export const GET = withAuth(async (_req, _ctx, userId) => {
+  const data = await listWatchlistGroups(userId);
   return NextResponse.json(data);
-}
+});
 
-export async function POST(req: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+export const POST = withAuth(async (req, _ctx, userId) => {
   let body: unknown;
   try {
     body = await req.json();
@@ -37,7 +29,7 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
-  const row = await createWatchlistGroup(session.user.id, parsed.data);
+  const row = await createWatchlistGroup(userId, parsed.data);
   if (!row) {
     return NextResponse.json(
       { error: `不能使用保留分组名「${DEFAULT_WATCHLIST_GROUP_NAME}」` },
@@ -45,4 +37,4 @@ export async function POST(req: Request) {
     );
   }
   return NextResponse.json(row, { status: 201 });
-}
+});

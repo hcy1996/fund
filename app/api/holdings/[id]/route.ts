@@ -1,16 +1,12 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { withAuth } from "@/lib/routeAuth";
 import { HoldingMoveConflictError } from "@/lib/holdingErrors";
 import { updateHolding, deleteHolding } from "@/services/holdingService";
 import { holdingUpdateSchema } from "@/lib/validations";
 
 type RouteCtx = { params: Promise<{ id: string }> };
 
-export async function PUT(req: Request, ctx: RouteCtx) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+export const PUT = withAuth(async (req, ctx: RouteCtx, userId) => {
   const { id } = await ctx.params;
   let body: unknown;
   try {
@@ -31,7 +27,7 @@ export async function PUT(req: Request, ctx: RouteCtx) {
   }
   let row;
   try {
-    row = await updateHolding(session.user.id, id, parsed.data);
+    row = await updateHolding(userId, id, parsed.data);
   } catch (e) {
     if (e instanceof HoldingMoveConflictError) {
       return NextResponse.json({ error: e.message }, { status: 409 });
@@ -42,17 +38,13 @@ export async function PUT(req: Request, ctx: RouteCtx) {
     return NextResponse.json({ error: "未找到持仓" }, { status: 404 });
   }
   return NextResponse.json(row);
-}
+});
 
-export async function DELETE(_req: Request, ctx: RouteCtx) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+export const DELETE = withAuth(async (_req, ctx: RouteCtx, userId) => {
   const { id } = await ctx.params;
-  const ok = await deleteHolding(session.user.id, id);
+  const ok = await deleteHolding(userId, id);
   if (!ok) {
     return NextResponse.json({ error: "未找到持仓" }, { status: 404 });
   }
   return NextResponse.json({ ok: true });
-}
+});

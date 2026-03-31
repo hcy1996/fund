@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { withAuth } from "@/lib/routeAuth";
 import {
   addWatchlistItem,
   listWatchlistGrouped,
@@ -10,20 +10,12 @@ import {
   watchlistItemRemoveFromGroupSchema,
 } from "@/lib/validations";
 
-export async function GET() {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
-  const data = await listWatchlistGrouped(session.user.id);
+export const GET = withAuth(async (_req, _ctx, userId) => {
+  const data = await listWatchlistGrouped(userId);
   return NextResponse.json(data);
-}
+});
 
-export async function POST(req: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+export const POST = withAuth(async (req, _ctx, userId) => {
   let body: unknown;
   try {
     body = await req.json();
@@ -34,15 +26,11 @@ export async function POST(req: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
-  const row = await addWatchlistItem(session.user.id, parsed.data);
+  const row = await addWatchlistItem(userId, parsed.data);
   return NextResponse.json(row, { status: 201 });
-}
+});
 
-export async function DELETE(req: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
+export const DELETE = withAuth(async (req, _ctx, userId) => {
   let body: unknown;
   try {
     body = await req.json();
@@ -53,9 +41,9 @@ export async function DELETE(req: Request) {
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
-  const ok = await removeWatchlistItemFromGroup(session.user.id, parsed.data);
+  const ok = await removeWatchlistItemFromGroup(userId, parsed.data);
   if (!ok) {
     return NextResponse.json({ error: "记录不存在" }, { status: 404 });
   }
   return NextResponse.json({ ok: true });
-}
+});

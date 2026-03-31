@@ -1,13 +1,8 @@
 import { NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { withAuth } from "@/lib/routeAuth";
 import { getHoldingStatsByCategoryForUser } from "@/services/statsService";
 
-export async function GET(req: Request) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    return NextResponse.json({ error: "未登录" }, { status: 401 });
-  }
-
+export const GET = withAuth(async (req, _ctx, userId) => {
   const { searchParams } = new URL(req.url);
   const dim = searchParams.get("dim");
 
@@ -18,7 +13,7 @@ export async function GET(req: Request) {
   const accountId = searchParams.get("accountId") ?? undefined;
   const ownerName = searchParams.get("ownerName") ?? undefined;
 
-  const data = await getHoldingStatsByCategoryForUser(session.user.id, dim, { accountId, ownerName });
+  const data = await getHoldingStatsByCategoryForUser(userId, dim, { accountId, ownerName });
 
   return NextResponse.json(
     {
@@ -31,5 +26,4 @@ export async function GET(req: Request) {
       },
     },
   );
-}
-
+});

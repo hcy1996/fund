@@ -12,7 +12,7 @@ export async function GET(req: Request) {
   const list = await searchFundsForUser(q, 10, session?.user?.id);
   return NextResponse.json(list, {
     headers: {
-      "Cache-Control": "public, s-maxage=300, stale-while-revalidate=600",
+      "Cache-Control": "public, s-maxage=120, stale-while-revalidate=300",
     },
   });
 }
