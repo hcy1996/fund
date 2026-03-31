@@ -17,12 +17,14 @@ yarn install
 ## 数据库
 
 1. 在 MySQL 中创建数据库，例如 `fund_estimator`。
-2. 复制环境变量并填写连接串：
+2. 按环境复制模板并填写连接串：
 
 ```bash
-cp .env.example .env
-# 编辑 .env 中的 DATABASE_URL
+cp .env.development.example .env.development.local
+# 编辑 .env.development.local 中的 DATABASE_URL（默认本地 127.0.0.1:3307）
 ```
+
+生产环境变量可参考 `.env.production.example`。
 
 或使用项目内 Docker（需本机已安装并启动 Docker）：
 
@@ -64,6 +66,11 @@ yarn dev
 | `DATABASE_URL` | MySQL 连接串，如 `mysql://user:pass@host:3306/fund_estimator` |
 | `NEXTAUTH_SECRET` | NextAuth 密钥，生产环境务必更换 |
 | `NEXTAUTH_URL` | 站点根 URL，本地一般为 `http://localhost:3000` |
+| `CRON_SECRET` | 定时任务接口鉴权密钥（`/api/jobs/stats-snapshot`） |
+| `FUND_QUOTE_CONCURRENCY_LIMIT` | 行情并发拉取上限，默认 `3` |
+| `FUND_QUOTE_LOCAL_CACHE_TTL_MS` | 行情缓存 TTL（毫秒），默认 `15000` |
+| `ENABLE_FUND_SNAPSHOT` | 是否落库快照（`1` 开启） |
+| `VISION_PROVIDER` | 截图识别模型路由：`auto/openai/dashscope/volc/ark` |
 
 ## 主要接口（HTTP）
 

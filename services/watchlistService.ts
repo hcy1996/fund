@@ -12,6 +12,36 @@ function sortGroupsDefaultFirst<T extends { name: string; sortOrder: number }>(r
   return [...def, ...rest];
 }
 
+async function mapWithConcurrencyLimit<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const n = Math.max(1, Math.floor(limit));
+  if (items.length === 0) return [];
+  if (n === 1 || items.length === 1) {
+    const out: R[] = [];
+    for (let i = 0; i < items.length; i++) {
+      out.push(await mapper(items[i]!, i));
+    }
+    return out;
+  }
+
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= items.length) return;
+      results[idx] = await mapper(items[idx]!, idx);
+    }
+  }
+
+  const workerCount = Math.min(n, items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
 export async function ensureDefaultWatchlistGroup(userId: string) {
   return prisma.watchlistGroup.upsert({
     where: { userId_name: { userId, name: DEFAULT_WATCHLIST_GROUP_NAME } },
@@ -294,11 +324,10 @@ export async function addWatchlistItem(
     where: { userId, id: { in: input.groupIds } },
     select: { id: true },
   });
-  for (const g of groups) {
-    await prisma.watchlistItemGroup.upsert({
-      where: { groupId_itemId: { groupId: g.id, itemId: item.id } },
-      update: {},
-      create: { groupId: g.id, itemId: item.id },
+  if (groups.length > 0) {
+    await prisma.watchlistItemGroup.createMany({
+      data: groups.map((g) => ({ groupId: g.id, itemId: item.id })),
+      skipDuplicates: true,
     });
   }
 
@@ -344,8 +373,11 @@ export async function removeWatchlistItemFromGroup(
 
     const hasCustom = remaining.some((m) => m.group.name !== DEFAULT_WATCHLIST_GROUP_NAME);
     if (!hasCustom) {
-      for (const m of remaining.filter((x) => x.group.name === DEFAULT_WATCHLIST_GROUP_NAME)) {
-        await tx.watchlistItemGroup.delete({ where: { id: m.id } });
+      const defaultIds = remaining
+        .filter((x) => x.group.name === DEFAULT_WATCHLIST_GROUP_NAME)
+        .map((x) => x.id);
+      if (defaultIds.length > 0) {
+        await tx.watchlistItemGroup.deleteMany({ where: { id: { in: defaultIds } } });
       }
     }
 
@@ -401,8 +433,11 @@ export async function listWatchlistGrouped(userId: string): Promise<WatchlistGro
     }
   }
 
-  const quoteEntries = await Promise.all(
-    Array.from(codeSet).map(async (code) => [code, await getFundQuote(code)] as const),
+  const quoteConcurrency = Number(process.env.FUND_QUOTE_CONCURRENCY_LIMIT ?? 6);
+  const quoteEntries = await mapWithConcurrencyLimit(
+    Array.from(codeSet),
+    quoteConcurrency,
+    async (code) => [code, await getFundQuote(code)] as const,
   );
   const quoteMap = new Map(quoteEntries);
 

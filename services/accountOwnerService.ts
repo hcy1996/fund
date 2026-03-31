@@ -1,10 +1,13 @@
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 
 export type AccountOwnerDto = {
   id: string;
   name: string;
   sortOrder: number;
 };
+
+type AccountOwnerDb = Pick<typeof prisma, "accountOwner" | "account" | "$transaction">;
 
 async function ensureSeedAccountOwners(userId: string) {
   // 兼容旧数据：owner 为空但存在 isMine 的账户，先回填 owner，
@@ -83,29 +86,47 @@ export async function updateAccountOwner(
   id: string,
   input: { name?: string; sortOrder?: number },
 ) {
-  const row = await prisma.accountOwner.findFirst({ where: { id, userId } });
+  return updateAccountOwnerWithDb(prisma, userId, id, input);
+}
+
+export async function updateAccountOwnerWithDb(
+  db: AccountOwnerDb,
+  userId: string,
+  id: string,
+  input: { name?: string; sortOrder?: number },
+) {
+  const row = await db.accountOwner.findFirst({ where: { id, userId } });
   if (!row) return null;
 
   const nextName = input.name !== undefined ? input.name.trim() : undefined;
   const nextSortOrder = input.sortOrder !== undefined ? input.sortOrder : undefined;
 
-  if (nextName && nextName !== row.name) {
-    await prisma.account.updateMany({
-      where: { userId, owner: row.name },
-      data: {
-        owner: nextName,
-      },
-    });
-  }
+  try {
+    const updated = await db.$transaction(async (tx) => {
+      if (nextName && nextName !== row.name) {
+        await tx.account.updateMany({
+          where: { userId, owner: row.name },
+          data: {
+            owner: nextName,
+          },
+        });
+      }
 
-  const updated = await prisma.accountOwner.update({
-    where: { id },
-    data: {
-      ...(nextName !== undefined ? { name: nextName } : {}),
-      ...(nextSortOrder !== undefined ? { sortOrder: nextSortOrder } : {}),
-    },
-  });
-  return updated;
+      return tx.accountOwner.update({
+        where: { id },
+        data: {
+          ...(nextName !== undefined ? { name: nextName } : {}),
+          ...(nextSortOrder !== undefined ? { sortOrder: nextSortOrder } : {}),
+        },
+      });
+    });
+    return updated;
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2002") {
+      throw new Error("归属人名已存在");
+    }
+    throw e;
+  }
 }
 
 export async function deleteAccountOwner(userId: string, id: string) {
@@ -120,4 +141,3 @@ export async function deleteAccountOwner(userId: string, id: string) {
   await prisma.accountOwner.delete({ where: { id } });
   return true;
 }
-

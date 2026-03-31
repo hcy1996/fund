@@ -19,6 +19,26 @@ export type RawFundLatestNav = {
   changeRate?: string;
 };
 
+function getTimeoutMs(envName: string, fallback: number) {
+  const raw = process.env[envName];
+  const n = raw ? Number(raw) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 function parseJsonp(text: string): RawFundGz | null {
   const m = text.match(/jsonpgz\((\{[\s\S]*\})\)/);
   if (!m?.[1]) {
@@ -40,8 +60,9 @@ export async function fetchFundGzRaw(
     return null;
   }
   const url = `https://fundgz.1234567.com.cn/js/${encodeURIComponent(trimmed)}.js`;
+  const timeoutMs = getTimeoutMs("FUND_PROVIDER_TIMEOUT_MS", 3000);
   try {
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       headers: {
         Accept: "*/*",
         Referer: "https://fund.eastmoney.com/",
@@ -51,7 +72,7 @@ export async function fetchFundGzRaw(
       ...(opts?.bypassCache
         ? { cache: "no-store" as const }
         : { next: { revalidate: 30 } }),
-    });
+    }, timeoutMs);
     if (!res.ok) {
       return null;
     }
@@ -80,8 +101,9 @@ export async function fetchFundLsjzPage(
     return null;
   }
   const url = `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${encodeURIComponent(trimmed)}&pageIndex=${pageIndex}&pageSize=20`;
+  const timeoutMs = getTimeoutMs("FUND_PROVIDER_TIMEOUT_MS", 4500);
   try {
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       headers: {
         Accept: "application/json, text/plain, */*",
         Referer: "https://fundf10.eastmoney.com/",
@@ -90,7 +112,7 @@ export async function fetchFundLsjzPage(
       },
       /** 历史 lsjz 按日披露为主，全站共用长缓存，减轻东财压力（与 fundNavHistoryService unstable_cache 一致） */
       next: { revalidate: 86_400 },
-    });
+    }, timeoutMs);
     if (!res.ok) {
       return null;
     }
@@ -119,8 +141,9 @@ export async function fetchFundLatestNavRaw(code: string): Promise<RawFundLatest
     return null;
   }
   const url = `https://api.fund.eastmoney.com/f10/lsjz?fundCode=${encodeURIComponent(trimmed)}&pageIndex=1&pageSize=1`;
+  const timeoutMs = getTimeoutMs("FUND_PROVIDER_TIMEOUT_MS", 3000);
   try {
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       headers: {
         Accept: "application/json, text/plain, */*",
         Referer: "https://fundf10.eastmoney.com/",
@@ -128,7 +151,7 @@ export async function fetchFundLatestNavRaw(code: string): Promise<RawFundLatest
           "Mozilla/5.0 (compatible; FundEstimator/1.0; +https://localhost)",
       },
       next: { revalidate: 60 },
-    });
+    }, timeoutMs);
     if (!res.ok) {
       return null;
     }

@@ -243,6 +243,14 @@ export async function POST(req: Request) {
   ).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
 
   const users = await prisma.user.findMany({ select: { id: true } });
+  const lastSnapshots = await prisma.statsSnapshot.groupBy({
+    by: ["userId"],
+    where: { ownerName },
+    _max: { snapshotAt: true },
+  });
+  const lastByUserId = new Map(
+    lastSnapshots.map((x) => [x.userId, x._max.snapshotAt] as const),
+  );
   let ok = 0;
   let skipped = 0;
   const errors: Array<{ userId: string; error: string }> = [];
@@ -257,12 +265,8 @@ export async function POST(req: Request) {
       }
 
       // 防重复：同一用户同一归属人 1 小时内只存一份
-      const last = await prisma.statsSnapshot.findFirst({
-        where: { userId: u.id, ownerName },
-        orderBy: { snapshotAt: "desc" },
-        select: { snapshotAt: true },
-      });
-      if (last && now.getTime() - last.snapshotAt.getTime() < 60 * 60 * 1000) {
+      const lastAt = lastByUserId.get(u.id);
+      if (lastAt && now.getTime() - lastAt.getTime() < 60 * 60 * 1000) {
         skipped++;
         continue;
       }
@@ -301,4 +305,3 @@ export async function POST(req: Request) {
 
   return NextResponse.json({ ok, skipped, errorsCount: errors.length, errors });
 }
-

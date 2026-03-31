@@ -50,6 +50,10 @@ model Holding {
   user       User      @relation(fields: [userId], references: [id])
   account    Account?  @relation(fields: [accountId], references: [id])
   fund       Fund      @relation(fields: [fundId], references: [id])
+
+  @@unique([userId, accountId, fundId])
+  @@index([userId, accountId])
+  @@index([userId, sortOrder])
 }
 
 model Account {
@@ -181,4 +185,3 @@ model StatsSnapshot {
 
   @@index([userId, ownerName, snapshotAt])
 }
-

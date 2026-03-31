@@ -65,7 +65,7 @@ export async function listHoldingsForUser(
   // 同一请求内：如果同一只基金在多条 holding 里出现，只取一次行情，显著降低外部接口调用次数
   const uniqueCodes = Array.from(new Set(rows.map((h) => h.fund.code)));
   const t0 = Date.now();
-  const quoteConcurrency = Number(process.env.FUND_QUOTE_CONCURRENCY_LIMIT ?? 3);
+  const quoteConcurrency = Number(process.env.FUND_QUOTE_CONCURRENCY_LIMIT ?? 6);
   const uniqueQuotes = await mapWithConcurrencyLimit(uniqueCodes, quoteConcurrency, async (code) => {
     const t1 = Date.now();
     const q = await getFundQuote(code);
@@ -188,7 +188,7 @@ export async function listHoldingsForUserByAccountIds(
   // 同一请求内：对 fundCode 去重，避免重复请求行情
   const uniqueCodes = Array.from(new Set(rows.map((h) => h.fund.code)));
   const t0 = Date.now();
-  const quoteConcurrency = Number(process.env.FUND_QUOTE_CONCURRENCY_LIMIT ?? 3);
+  const quoteConcurrency = Number(process.env.FUND_QUOTE_CONCURRENCY_LIMIT ?? 6);
   const uniqueQuotes = await mapWithConcurrencyLimit(uniqueCodes, quoteConcurrency, async (code) => {
     const t1 = Date.now();
     const q = await getFundQuote(code);
@@ -370,54 +370,80 @@ export async function importHoldingsBatch(
     defaultGroupId = def.id;
   }
 
-  for (const item of items) {
+  const codes = Array.from(new Set(items.map((x) => x.fundCode.trim()).filter(Boolean)));
+  const funds = await prisma.fund.findMany({
+    where: { code: { in: codes } },
+    select: { code: true, categoryId: true, category: { select: { parentId: true } } },
+  });
+  const fundByCode = new Map(funds.map((f) => [f.code, f] as const));
+
+  const existingByCode = new Map<string, { id: string }>();
+  if (activeAccountId && codes.length > 0) {
+    const existingRows = await prisma.holding.findMany({
+      where: { userId, accountId: activeAccountId, fund: { code: { in: codes } } },
+      select: { id: true, fund: { select: { code: true } } },
+    });
+    for (const row of existingRows) {
+      existingByCode.set(row.fund.code, { id: row.id });
+    }
+  }
+
+  const importConcurrency = Number(process.env.HOLDINGS_IMPORT_CONCURRENCY_LIMIT ?? 1);
+  const taskResults = await mapWithConcurrencyLimit(items, importConcurrency, async (item) => {
     const code = item.fundCode.trim();
     try {
-      // 截图导入也必须先为基金配置“小类”
-      const fundCategory = await prisma.fund.findUnique({
-        where: { code },
-        select: { categoryId: true, category: { select: { parentId: true } } },
-      });
-      const isSmallCategory = !!fundCategory?.categoryId && fundCategory?.category?.parentId !== null;
+      const fundCategory = fundByCode.get(code);
+      const isSmallCategory = !!fundCategory?.categoryId && fundCategory.category?.parentId !== null;
       if (!isSmallCategory) {
         throw new Error("加入持仓失败：请先为基金设置“小类”（大类不能直接使用）。");
       }
 
-      const existing =
-        activeAccountId &&
-        (await prisma.holding.findFirst({
-          where: { userId, accountId: activeAccountId, fund: { code } },
-          select: { id: true },
-        }));
+      const existing = existingByCode.get(code);
       if (existing) {
         await updateHolding(userId, existing.id, {
           shares: item.shares,
           costPrice: item.costPrice,
         });
-        result.updated++;
       } else {
-        await createHolding(userId, {
+        const created = await createHolding(userId, {
           fundCode: code,
           fundName: item.fundName,
           shares: item.shares,
           costPrice: item.costPrice,
           accountId: activeAccountId ?? undefined,
         });
-        result.created++;
+        existingByCode.set(code, { id: created.id });
       }
+
       if (defaultGroupId) {
         await addWatchlistItem(userId, {
           fundCode: code,
           fundName: item.fundName,
           groupIds: [defaultGroupId],
         });
-        result.watchlistSynced++;
       }
+
+      return {
+        created: existing ? 0 : 1,
+        updated: existing ? 1 : 0,
+        watchlistSynced: defaultGroupId ? 1 : 0,
+        error: null as string | null,
+      };
     } catch (e) {
-      result.errors.push(
-        `${code}: ${e instanceof Error ? e.message : "未知错误"}`,
-      );
+      return {
+        created: 0,
+        updated: 0,
+        watchlistSynced: 0,
+        error: `${code}: ${e instanceof Error ? e.message : "未知错误"}`,
+      };
     }
+  });
+
+  for (const r of taskResults) {
+    result.created += r.created;
+    result.updated += r.updated;
+    result.watchlistSynced += r.watchlistSynced;
+    if (r.error) result.errors.push(r.error);
   }
 
   return result;

@@ -21,6 +21,53 @@ type EastMoneySearchItem = {
 };
 
 const FUND_SEARCH_CACHE_SECONDS = 300;
+const FUND_SEARCH_VARIANTS_CONCURRENCY = 4;
+
+function getSearchTimeoutMs() {
+  const raw = process.env.FUND_SEARCH_TIMEOUT_MS;
+  const n = raw ? Number(raw) : NaN;
+  if (!Number.isFinite(n) || n <= 0) return 3000;
+  return n;
+}
+
+async function fetchWithTimeout(
+  input: string,
+  init: RequestInit,
+  timeoutMs: number,
+): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function mapWithConcurrencyLimit<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const n = Math.max(1, Math.floor(limit));
+  if (items.length === 0) return [];
+  if (n === 1 || items.length === 1) {
+    const out: R[] = [];
+    for (let i = 0; i < items.length; i++) out.push(await mapper(items[i]!, i));
+    return out;
+  }
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= items.length) return;
+      results[idx] = await mapper(items[idx]!, idx);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, () => worker()));
+  return results;
+}
 
 async function searchFundsEastMoneyUncached(
   trimmed: string,
@@ -29,8 +76,9 @@ async function searchFundsEastMoneyUncached(
   const url = `https://fundsuggest.eastmoney.com/FundSearch/api/FundSearchAPI.ashx?m=1&key=${encodeURIComponent(
     trimmed,
   )}`;
+  const timeoutMs = getSearchTimeoutMs();
   try {
-    const res = await fetch(url, {
+    const res = await fetchWithTimeout(url, {
       headers: {
         Accept: "application/json, text/plain, */*",
         Referer: "https://fund.eastmoney.com/",
@@ -38,7 +86,7 @@ async function searchFundsEastMoneyUncached(
           "Mozilla/5.0 (compatible; FundEstimator/1.0; +https://localhost)",
       },
       next: { revalidate: 60 },
-    });
+    }, timeoutMs);
     if (!res.ok) {
       return [];
     }
@@ -245,8 +293,12 @@ export async function resolveFundByNameFromEastMoney(displayName: string): Promi
   const variants = buildFundSearchQueryVariants(displayName);
   const merged = new Map<string, FundSearchHit>();
 
-  for (const q of variants) {
-    const hits = await searchFundsEastMoney(q, 25);
+  const variantHits = await mapWithConcurrencyLimit(
+    variants,
+    FUND_SEARCH_VARIANTS_CONCURRENCY,
+    (q) => searchFundsEastMoney(q, 25),
+  );
+  for (const hits of variantHits) {
     for (const h of hits) merged.set(h.code, h);
     if (merged.size >= 40) break;
   }

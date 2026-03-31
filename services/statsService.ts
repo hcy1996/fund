@@ -30,6 +30,36 @@ export type HoldingStatsByCategory = {
 const BIG_UNCLASSIFIED = "未分类";
 const SMALL_UNCLASSIFIED = "未设置小类";
 
+async function mapWithConcurrencyLimit<T, R>(
+  items: T[],
+  limit: number,
+  mapper: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
+  const n = Math.max(1, Math.floor(limit));
+  if (items.length === 0) return [];
+  if (n === 1 || items.length === 1) {
+    const out: R[] = [];
+    for (let i = 0; i < items.length; i++) {
+      out.push(await mapper(items[i]!, i));
+    }
+    return out;
+  }
+
+  const results = new Array<R>(items.length);
+  let cursor = 0;
+  async function worker() {
+    while (true) {
+      const idx = cursor++;
+      if (idx >= items.length) return;
+      results[idx] = await mapper(items[idx]!, idx);
+    }
+  }
+
+  const workerCount = Math.min(n, items.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
 export async function getHoldingStatsByCategoryForUser(
   userId: string,
   dim: Dim,
@@ -132,32 +162,28 @@ export async function getHoldingStatsByCategoryForUser(
   }
 
   // 2. 拉取 quote 计算金额
-  const stats: HoldingFundStat[] = [];
-  for (const item of byCode.values()) {
+  const quoteConcurrency = Number(process.env.FUND_QUOTE_CONCURRENCY_LIMIT ?? 6);
+  const items = Array.from(byCode.values());
+  const stats = await mapWithConcurrencyLimit(items, quoteConcurrency, async (item) => {
     const quote = await getFundQuote(item.fundCode);
     const shares = item.shares;
 
-    const dailyNav =
-      quote.nav ??
-      quote.officialNav ??
-      quote.estimateNav ??
-      0;
+    const dailyNav = quote.nav ?? quote.officialNav ?? quote.estimateNav ?? 0;
     const totalNav =
       quote.navSource !== "official" && quote.officialNav !== undefined
         ? quote.officialNav
         : dailyNav;
 
     const value = Number.isFinite(totalNav) ? shares * Number(totalNav) : 0;
-
-    stats.push({
+    return {
       code: item.fundCode,
       name: quote.fundName || item.fundName,
       value,
       pct: 0,
       bigName: item.bigName,
       smallName: item.smallName,
-    });
-  }
+    } satisfies HoldingFundStat;
+  });
 
   const totalValue = stats.reduce((sum, s) => sum + s.value, 0);
   if (totalValue <= 0) {
@@ -247,4 +273,3 @@ export async function getHoldingStatsByCategoryForUser(
 
   return { totalValue, groups };
 }
-

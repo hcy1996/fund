@@ -59,6 +59,27 @@ function isQdiiFund(name: string | undefined) {
 /** 略短于 fundgz fetch revalidate(30s)，跨请求合并同一基金行情，减轻东财与并发穿透 */
 const FUND_QUOTE_CACHE_SECONDS = 25;
 
+type LocalQuoteCacheItem = {
+  expiresAt: number;
+  value?: FundQuote;
+  inflight?: Promise<FundQuote>;
+};
+
+const localQuoteCache: Map<string, LocalQuoteCacheItem> = (() => {
+  const g = globalThis as unknown as { __localQuoteCache?: Map<string, LocalQuoteCacheItem> };
+  if (g.__localQuoteCache) return g.__localQuoteCache;
+  const m = new Map<string, LocalQuoteCacheItem>();
+  g.__localQuoteCache = m;
+  return m;
+})();
+
+function getLocalTtlMs() {
+  const raw = process.env.FUND_QUOTE_LOCAL_CACHE_TTL_MS;
+  const n = raw ? Number(raw) : NaN;
+  if (!Number.isFinite(n) || n <= 0) return 10_000;
+  return n;
+}
+
 async function buildFundQuote(fundCode: string): Promise<FundQuote> {
   const trading = isTradingTime();
   const [raw, latestNavRaw] = await Promise.all([
@@ -206,33 +227,54 @@ export async function getFundQuote(code: string): Promise<FundQuote> {
     };
   }
 
-  const quote = await unstable_cache(
-    async () => buildFundQuote(fundCode),
-    ["fund-quote-v1", fundCode],
-    { revalidate: FUND_QUOTE_CACHE_SECONDS },
-  )();
+  const now = Date.now();
+  const ttlMs = getLocalTtlMs();
+  const existing = localQuoteCache.get(fundCode);
 
-  // 注意：/api/holdings 这类列表接口会在一次请求里触发大量 getFundQuote，
-  // 如果每次都写 FundSnapshot，会显著拉高响应时间。
-  // 仅在明确开启时才写快照，默认跳过以保证列表接口性能。
-  if (process.env.ENABLE_FUND_SNAPSHOT === "1") {
-    try {
-      await prisma.fundSnapshot.create({
-        data: {
-          fundCode: quote.fundCode,
-          nav: quote.nav !== undefined ? new Prisma.Decimal(quote.nav) : null,
-          estimateNav:
-            quote.estimateNav !== undefined ? new Prisma.Decimal(quote.estimateNav) : null,
-          estimateRate:
-            quote.estimateChangeRate !== undefined
-              ? new Prisma.Decimal(quote.estimateChangeRate)
-              : null,
-        },
-      });
-    } catch {
-      // 快照失败不影响主流程
-    }
+  // 1) 已有结果且未过期：直接返回，避免任何外部请求
+  if (existing?.value && existing.expiresAt > now) {
+    return existing.value;
   }
 
-  return quote;
+  // 2) 有正在请求的 Promise 且未过期：直接复用，避免并发穿透打多次
+  if (existing?.inflight && existing.expiresAt > now) {
+    return existing.inflight;
+  }
+
+  // 3) 发起新的拉取
+  const expiresAt = now + ttlMs;
+  const inflight = (async () => {
+    const quote = await unstable_cache(
+      async () => buildFundQuote(fundCode),
+      ["fund-quote-v1", fundCode],
+      { revalidate: FUND_QUOTE_CACHE_SECONDS },
+    )();
+
+    // 注意：/api/holdings 这类列表接口会在一次请求里触发大量 getFundQuote，
+    // 如果每次都写 FundSnapshot，会显著拉高响应时间。
+    // 仅在明确开启时才写快照，默认跳过以保证列表接口性能。
+    if (process.env.ENABLE_FUND_SNAPSHOT === "1") {
+      try {
+        await prisma.fundSnapshot.create({
+          data: {
+            fundCode: quote.fundCode,
+            nav: quote.nav !== undefined ? new Prisma.Decimal(quote.nav) : null,
+            estimateNav:
+              quote.estimateNav !== undefined ? new Prisma.Decimal(quote.estimateNav) : null,
+            estimateRate:
+              quote.estimateChangeRate !== undefined ? new Prisma.Decimal(quote.estimateChangeRate) : null,
+          },
+        });
+      } catch {
+        // 快照失败不影响主流程
+      }
+    }
+
+    // 写入本地结果缓存
+    localQuoteCache.set(fundCode, { expiresAt, value: quote });
+    return quote;
+  })();
+
+  localQuoteCache.set(fundCode, { expiresAt, inflight });
+  return inflight;
 }

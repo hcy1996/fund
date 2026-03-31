@@ -25,9 +25,20 @@ export async function PUT(req: Request, ctx: RouteCtx) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
-  const row = await updateAccountOwner(session.user.id, id, { name: parsed.data.name, sortOrder: parsed.data.sortOrder });
-  if (!row) return NextResponse.json({ error: "未找到" }, { status: 404 });
-  return NextResponse.json(row);
+  try {
+    const row = await updateAccountOwner(session.user.id, id, {
+      name: parsed.data.name,
+      sortOrder: parsed.data.sortOrder,
+    });
+    if (!row) return NextResponse.json({ error: "未找到" }, { status: 404 });
+    return NextResponse.json(row);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "更新失败";
+    if (msg.includes("已存在")) {
+      return NextResponse.json({ error: msg }, { status: 409 });
+    }
+    return NextResponse.json({ error: msg }, { status: 400 });
+  }
 }
 
 export async function DELETE(_req: Request, ctx: RouteCtx) {
@@ -45,4 +56,3 @@ export async function DELETE(_req: Request, ctx: RouteCtx) {
     return NextResponse.json({ error: e instanceof Error ? e.message : "删除失败" }, { status: 400 });
   }
 }
-
