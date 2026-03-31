@@ -9,10 +9,19 @@ import Decimal from "decimal.js";
 
 export type { HoldingWithProfit };
 
+export type HoldingsDebugTimings = {
+  uniqueFundCodes: number;
+  quoteMsTotal: number;
+  quoteMsAvg: number;
+  quoteMsMax: number;
+  quotePerCode?: Array<{ code: string; ms: number }>;
+};
+
 export async function listHoldingsForUser(
   userId: string,
   accountId?: string,
-): Promise<HoldingWithProfit[]> {
+  opts?: { debug?: boolean },
+): Promise<{ data: HoldingWithProfit[]; debugTimings?: HoldingsDebugTimings }> {
   let targetAccountId = accountId;
   if (!targetAccountId) {
     const accounts = await listAccountsForUser(userId);
@@ -23,11 +32,30 @@ export async function listHoldingsForUser(
     include: { fund: true },
   });
 
-  const quotes = await Promise.all(rows.map((h) => getFundQuote(h.fund.code)));
+  // 同一请求内：如果同一只基金在多条 holding 里出现，只取一次行情，显著降低外部接口调用次数
+  const uniqueCodes = Array.from(new Set(rows.map((h) => h.fund.code)));
+  const t0 = Date.now();
+  const uniqueQuotes = await Promise.all(
+    uniqueCodes.map(async (code) => {
+      const t1 = Date.now();
+      const q = await getFundQuote(code);
+      const ms = Date.now() - t1;
+      return opts?.debug ? { code, q, ms } : { code, q, ms: 0 };
+    }),
+  );
+  const quoteMsTotal = Date.now() - t0;
+  const perCode = opts?.debug ? uniqueQuotes.map((x) => ({ code: x.code, ms: x.ms })) : undefined;
+  const quoteMsMax = opts?.debug ? Math.max(...(perCode?.map((x) => x.ms) ?? [0])) : 0;
+  const quoteMsAvg = opts?.debug
+    ? perCode && perCode.length > 0
+      ? perCode.reduce((s, it) => s + it.ms, 0) / perCode.length
+      : 0
+    : 0;
+  const quoteByCode = new Map(uniqueCodes.map((code, i) => [code, uniqueQuotes[i]!.q] as const));
   const out: HoldingWithProfit[] = [];
   for (let i = 0; i < rows.length; i++) {
     const h = rows[i]!;
-    const quote = quotes[i]!;
+    const quote = quoteByCode.get(h.fund.code)!;
     const shares = new Decimal(h.shares.toString());
     const costPrice = new Decimal(h.costPrice.toString());
     // 当日涨跌/当日收益：与 getFundQuote 的 quote.nav、quote.dailyChangeRate 一致（盘中优先估值）
@@ -80,30 +108,78 @@ export async function listHoldingsForUser(
   }
   const hasManualOrder = out.some((x) => x.sortOrder !== null && x.sortOrder !== undefined);
   if (hasManualOrder) {
-    return out.sort((a, b) => (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER));
+    const sorted = out.sort(
+      (a, b) => (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER),
+    );
+    return {
+      data: sorted,
+      debugTimings:
+        opts?.debug && uniqueCodes.length > 0
+          ? {
+              uniqueFundCodes: uniqueCodes.length,
+              quoteMsTotal,
+              quoteMsAvg,
+              quoteMsMax,
+              quotePerCode: perCode,
+            }
+          : undefined,
+    };
   }
   // 默认按“持有金额(净)”排序，避免盘中估算导致排序与展示不一致
-  return out.sort((a, b) => b.profit.navValue - a.profit.navValue);
+  const sorted = out.sort((a, b) => b.profit.navValue - a.profit.navValue);
+  return {
+    data: sorted,
+    debugTimings:
+      opts?.debug && uniqueCodes.length > 0
+        ? {
+            uniqueFundCodes: uniqueCodes.length,
+            quoteMsTotal,
+            quoteMsAvg,
+            quoteMsMax,
+            quotePerCode: perCode,
+          }
+        : undefined,
+  };
 }
 
 export async function listHoldingsForUserByAccountIds(
   userId: string,
   accountIds: string[],
-): Promise<HoldingWithProfit[]> {
+  opts?: { debug?: boolean },
+): Promise<{ data: HoldingWithProfit[]; debugTimings?: HoldingsDebugTimings }> {
   const ids = accountIds.filter(Boolean);
-  if (ids.length === 0) return [];
+  if (ids.length === 0) return { data: [] };
 
   const rows = await prisma.holding.findMany({
     where: { userId, accountId: { in: ids } },
     include: { fund: true },
   });
-  if (rows.length === 0) return [];
+  if (rows.length === 0) return { data: [] };
 
-  const quotes = await Promise.all(rows.map((h) => getFundQuote(h.fund.code)));
+  // 同一请求内：对 fundCode 去重，避免重复请求行情
+  const uniqueCodes = Array.from(new Set(rows.map((h) => h.fund.code)));
+  const t0 = Date.now();
+  const uniqueQuotes = await Promise.all(
+    uniqueCodes.map(async (code) => {
+      const t1 = Date.now();
+      const q = await getFundQuote(code);
+      const ms = Date.now() - t1;
+      return opts?.debug ? { code, q, ms } : { code, q, ms: 0 };
+    }),
+  );
+  const quoteMsTotal = Date.now() - t0;
+  const perCode = opts?.debug ? uniqueQuotes.map((x) => ({ code: x.code, ms: x.ms })) : undefined;
+  const quoteMsMax = opts?.debug ? Math.max(...(perCode?.map((x) => x.ms) ?? [0])) : 0;
+  const quoteMsAvg = opts?.debug
+    ? perCode && perCode.length > 0
+      ? perCode.reduce((s, it) => s + it.ms, 0) / perCode.length
+      : 0
+    : 0;
+  const quoteByCode = new Map(uniqueCodes.map((code, i) => [code, uniqueQuotes[i]!.q] as const));
   const out: HoldingWithProfit[] = [];
   for (let i = 0; i < rows.length; i++) {
     const h = rows[i]!;
-    const quote = quotes[i]!;
+    const quote = quoteByCode.get(h.fund.code)!;
     const shares = new Decimal(h.shares.toString());
     const costPrice = new Decimal(h.costPrice.toString());
     const dailyNav = new Decimal(quote.nav ?? quote.estimateNav ?? quote.officialNav ?? 0);
@@ -152,9 +228,37 @@ export async function listHoldingsForUserByAccountIds(
 
   const hasManualOrder = out.some((x) => x.sortOrder !== null && x.sortOrder !== undefined);
   if (hasManualOrder) {
-    return out.sort((a, b) => (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER));
+    const sorted = out.sort(
+      (a, b) => (a.sortOrder ?? Number.MAX_SAFE_INTEGER) - (b.sortOrder ?? Number.MAX_SAFE_INTEGER),
+    );
+    return {
+      data: sorted,
+      debugTimings:
+        opts?.debug && uniqueCodes.length > 0
+          ? {
+              uniqueFundCodes: uniqueCodes.length,
+              quoteMsTotal,
+              quoteMsAvg,
+              quoteMsMax,
+              quotePerCode: perCode,
+            }
+          : undefined,
+    };
   }
-  return out.sort((a, b) => b.profit.navValue - a.profit.navValue);
+  const sorted = out.sort((a, b) => b.profit.navValue - a.profit.navValue);
+  return {
+    data: sorted,
+    debugTimings:
+      opts?.debug && uniqueCodes.length > 0
+        ? {
+            uniqueFundCodes: uniqueCodes.length,
+            quoteMsTotal,
+            quoteMsAvg,
+            quoteMsMax,
+            quotePerCode: perCode,
+          }
+        : undefined,
+  };
 }
 
 export type HoldingLookupRow = {

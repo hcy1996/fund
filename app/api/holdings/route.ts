@@ -12,18 +12,43 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
   const accountId = searchParams.get("accountId") || undefined;
   const ownerName = searchParams.get("ownerName") || undefined;
+  const debug = searchParams.get("debug") === "1";
 
-  const data = ownerName
+  const t0 = Date.now();
+
+  const dataResult = ownerName
     ? await (async () => {
+        const tAccounts0 = Date.now();
         const accounts = await prisma.account.findMany({
           where: { userId: session.user.id, owner: ownerName },
           select: { id: true },
         });
         const ids = accounts.map((a) => a.id);
-        return listHoldingsForUserByAccountIds(session.user.id, ids);
+        const r = await listHoldingsForUserByAccountIds(session.user.id, ids, { debug });
+        return {
+          ...r,
+          debugRoute: {
+            accountsQueryMs: Date.now() - tAccounts0,
+          },
+        };
       })()
-    : await listHoldingsForUser(session.user.id, accountId);
-  return NextResponse.json(data);
+    : await (async () => {
+        const r = await listHoldingsForUser(session.user.id, accountId, { debug });
+        return { ...r };
+      })();
+
+  if (debug && dataResult.debugTimings) {
+    return NextResponse.json({
+      data: dataResult.data,
+      debug: {
+        totalMs: Date.now() - t0,
+        ...(dataResult as any).debugRoute,
+        ...dataResult.debugTimings,
+      },
+    });
+  }
+
+  return NextResponse.json(dataResult.data);
 }
 
 export async function POST(req: Request) {
