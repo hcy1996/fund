@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/auth";
 import { listHoldingsForUser, listHoldingsForUserByAccountIds, createHolding } from "@/services/holdingService";
+import type { HoldingsDebugTimings } from "@/services/holdingService";
 import { holdingCreateSchema } from "@/lib/validations";
 import { prisma } from "@/lib/prisma";
+import type { HoldingWithProfit } from "@/types/holding";
 
 export async function GET(req: Request) {
   const session = await auth();
@@ -16,17 +18,20 @@ export async function GET(req: Request) {
 
   const t0 = Date.now();
   let accountsQueryMs: number | undefined = undefined;
+  let holdingsMs: number | undefined = undefined;
 
-  const dataResult = ownerName
+  const dataResult: { data: HoldingWithProfit[]; debugTimings?: HoldingsDebugTimings } = ownerName
     ? await (async () => {
         const tAccounts0 = Date.now();
         const accounts = await prisma.account.findMany({
           where: { userId: session.user.id, owner: ownerName },
           select: { id: true },
         });
-        const ids = accounts.map((a) => a.id);
-        const r = await listHoldingsForUserByAccountIds(session.user.id, ids, { debug });
         accountsQueryMs = Date.now() - tAccounts0;
+        const ids = accounts.map((a) => a.id);
+        const tHoldings0 = Date.now();
+        const r = await listHoldingsForUserByAccountIds(session.user.id, ids, { debug });
+        holdingsMs = Date.now() - tHoldings0;
         return r;
       })()
     : await (async () => {
@@ -40,7 +45,8 @@ export async function GET(req: Request) {
       debug: {
         totalMs: Date.now() - t0,
         accountsQueryMs,
-        ...(dataResult as any).debugTimings,
+        holdingsMs,
+        ...(dataResult.debugTimings ? dataResult.debugTimings : undefined),
       },
     });
   }
