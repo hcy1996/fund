@@ -212,21 +212,26 @@ export async function getFundQuote(code: string): Promise<FundQuote> {
     { revalidate: FUND_QUOTE_CACHE_SECONDS },
   )();
 
-  try {
-    await prisma.fundSnapshot.create({
-      data: {
-        fundCode: quote.fundCode,
-        nav: quote.nav !== undefined ? new Prisma.Decimal(quote.nav) : null,
-        estimateNav:
-          quote.estimateNav !== undefined ? new Prisma.Decimal(quote.estimateNav) : null,
-        estimateRate:
-          quote.estimateChangeRate !== undefined
-            ? new Prisma.Decimal(quote.estimateChangeRate)
-            : null,
-      },
-    });
-  } catch {
-    // 快照失败不影响主流程
+  // 注意：/api/holdings 这类列表接口会在一次请求里触发大量 getFundQuote，
+  // 如果每次都写 FundSnapshot，会显著拉高响应时间。
+  // 仅在明确开启时才写快照，默认跳过以保证列表接口性能。
+  if (process.env.ENABLE_FUND_SNAPSHOT === "1") {
+    try {
+      await prisma.fundSnapshot.create({
+        data: {
+          fundCode: quote.fundCode,
+          nav: quote.nav !== undefined ? new Prisma.Decimal(quote.nav) : null,
+          estimateNav:
+            quote.estimateNav !== undefined ? new Prisma.Decimal(quote.estimateNav) : null,
+          estimateRate:
+            quote.estimateChangeRate !== undefined
+              ? new Prisma.Decimal(quote.estimateChangeRate)
+              : null,
+        },
+      });
+    } catch {
+      // 快照失败不影响主流程
+    }
   }
 
   return quote;

@@ -15,6 +15,7 @@ export async function GET(req: Request) {
   const debug = searchParams.get("debug") === "1";
 
   const t0 = Date.now();
+  let accountsQueryMs: number | undefined = undefined;
 
   const dataResult = ownerName
     ? await (async () => {
@@ -25,25 +26,21 @@ export async function GET(req: Request) {
         });
         const ids = accounts.map((a) => a.id);
         const r = await listHoldingsForUserByAccountIds(session.user.id, ids, { debug });
-        return {
-          ...r,
-          debugRoute: {
-            accountsQueryMs: Date.now() - tAccounts0,
-          },
-        };
+        accountsQueryMs = Date.now() - tAccounts0;
+        return r;
       })()
     : await (async () => {
         const r = await listHoldingsForUser(session.user.id, accountId, { debug });
-        return { ...r };
+        return r;
       })();
 
-  if (debug && dataResult.debugTimings) {
+  if (debug) {
     return NextResponse.json({
       data: dataResult.data,
       debug: {
         totalMs: Date.now() - t0,
-        ...(dataResult as any).debugRoute,
-        ...dataResult.debugTimings,
+        accountsQueryMs,
+        ...(dataResult as any).debugTimings,
       },
     });
   }
